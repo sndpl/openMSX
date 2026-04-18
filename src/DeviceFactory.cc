@@ -10,6 +10,7 @@
 #include "ColecoJoystickIO.hh"
 #include "ColecoSuperGameModule.hh"
 #include "DalSoRiR2.hh"
+#include "DeyonetNetworkCartridge.hh"
 #include "DebugDevice.hh"
 #include "DeviceConfig.hh"
 #include "DummyDevice.hh"
@@ -205,6 +206,8 @@ std::unique_ptr<MSXDevice> DeviceFactory::create(DeviceConfig& conf)
 		result = std::make_unique<MSXMoonSound>(conf);
 	} else if (type == "DalSoRiR2") {
 		result = std::make_unique<DalSoRiR2>(conf);
+	} else if (type == "DeyonetNetworkCartridge") {
+		result = std::make_unique<DeyonetNetworkCartridge>(conf);
 	} else if (type == "OPL3Cartridge") {
 		result = std::make_unique<MSXOPL3Cartridge>(conf);
 	} else if (type == "Kanji") {

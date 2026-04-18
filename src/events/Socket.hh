@@ -25,10 +25,11 @@ inline constexpr int SOCKET_ERROR = -1;
 using SOCKET = int;
 using socklen_t = int;
 #else
-// INVALID_SOCKET is #defined as  (SOCKET)(~0)
-// but that gives a old-style-cast warning
-static const SOCKET OPENMSX_INVALID_SOCKET = static_cast<SOCKET>(~0);
-using in_addr_t =  UINT32;
+	// INVALID_SOCKET is #defined as  (SOCKET)(~0)
+	// but that gives a old-style-cast warning
+	static const SOCKET OPENMSX_INVALID_SOCKET = static_cast<SOCKET>(~0);
+	using in_addr_t =  UINT32;
+	using socklen_t = int;
 #endif
 
 [[nodiscard]] std::string sock_error();

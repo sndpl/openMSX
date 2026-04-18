@@ -1,0 +1,25 @@
+<?xml version="1.0" ?>
+<!DOCTYPE msxconfig SYSTEM 'msxconfig2.dtd'>
+<msxconfig>
+  <info>
+    <name>DenYoNet Network Cartridge</name>
+    <manufacturer>Sunrise / DenYoNet</manufacturer>
+    <code/>
+    <release_year>2004</release_year>
+    <description>DenYoNet Ethernet cartridge with WIZnet W5100 and UNAPI BIOS support. The BIOS ROM image must be supplied by the user as denyotcp.rom.</description>
+    <type>network cartridge</type>
+  </info>
+  <devices>
+    <primary slot="any">
+      <DeyonetNetworkCartridge id="DenYoNet">
+        <mem base="0x4000" size="0xC000"/>
+        <io base="0x28" num="2"/>
+        <rom>
+          <filename>~/.openMSX/share/extensions/denyotcp.rom</filename>
+          <filename>~/.openMSX/share/systemroms/denyotcp.rom</filename>
+          <filename>denyotcp.rom</filename>
+        </rom>
+      </DeyonetNetworkCartridge>
+    </primary>
+  </devices>
+</msxconfig>
