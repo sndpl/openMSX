@@ -53,12 +53,14 @@ private:
 	struct MapDir {
 		std::string hostName; // path relative to 'hostDir'
 		// The following two are used to detect changes in the host
-		// file compared to the last host->virtual-disk sync.
-		time_t mtime; // Modification time of host file at the time of
-		              // the last sync.
-		size_t filesize; // Host file size, normally the same as msx
-		                 // filesize, except when the host file was
-		                 // truncated.
+		// file compared to the last host->virtual-disk sync. Initialized
+		// to 0 so a freshly mapped (not yet synced) entry reliably looks
+		// "out of sync" until properly filled in.
+		time_t mtime = 0; // Modification time of host file at the time
+		                  // of the last sync.
+		size_t filesize = 0; // Host file size, normally the same as msx
+		                     // filesize, except when the host file was
+		                     // truncated.
 	};
 
 	[[nodiscard]] std::span<SectorBuffer> fat();
