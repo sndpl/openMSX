@@ -559,18 +559,17 @@ void DirAsDSK::importHostFile(DirIndex dirIndex, const FileOperations::Stat& fst
 	setMSXTimeStamp(dirIndex, fst);
 
 	// Set _host_ modification time (and filesize)
-	// Note: this is the _only_ place where we update the mapDir.mtime
-	// field. We do _not_ update it when the msx writes to the file. So in
-	// case the msx does write a data sector, it writes to the correct
-	// offset in the host file, but mtime is not updated. On the next
-	// host->emu sync we will resync the full file content and only then
-	// update mtime. This may seem inefficient, but it makes sure that we
-	// never miss any file changes performed by the host. E.g. the host
-	// changed part of the file short before the msx wrote to the same
-	// file. We can never guarantee that such race-scenarios work
-	// correctly, but at least with this mtime-update convention the file
-	// content will be the same on the host and the msx side after every
-	// sync.
+	// Note: besides here, mapDir.mtime/filesize are also updated by
+	// exportToHostFile() right after the msx caused us to (re)write a host
+	// file. Recording the resulting mtime/size there means the next
+	// host->emu sync won't mistake our own write for a host-side change and
+	// needlessly re-import it (which would also overwrite the msx-assigned
+	// directory date/time with a host-derived value). Genuine host-side
+	// changes are still detected: they change mtime/size away from the
+	// recorded value. We can never fully guarantee correctness for the race
+	// where the host changes a file in the tiny window around an msx write,
+	// but the file content stays consistent between host and msx after
+	// every sync.
 	size_t hostSize = fst.st_size;
 	auto& mapDir = mapDirs[dirIndex];
 	mapDir.filesize = hostSize;
@@ -1242,31 +1241,45 @@ void DirAsDSK::exportToHostFile(DirIndex dirIndex, const std::string& hostName)
 	//  - Length of FAT-chain * cluster-size, this chain can have length=0
 	//    if startCluster is not (yet) filled in.
 	try {
-		unsigned curCl = msxDir(dirIndex).startCluster;
-		unsigned msxSize = msxDir(dirIndex).size;
+		{
+			unsigned curCl = msxDir(dirIndex).startCluster;
+			unsigned msxSize = msxDir(dirIndex).size;
 
-		File file(hostDir + hostName, File::OpenMode::TRUNCATE);
-		unsigned offset = 0;
-		std::vector<bool> visited(maxCluster, false);
+			File file(hostDir + hostName, File::OpenMode::TRUNCATE);
+			unsigned offset = 0;
+			std::vector<bool> visited(maxCluster, false);
 
-		while ((FIRST_CLUSTER <= curCl) && (curCl < maxCluster)) {
-			if (visited[curCl]) {
-				// detected cycle, invalid disk, but don't crash on it
-				return;
-			}
-			visited[curCl] = true;
+			while ((FIRST_CLUSTER <= curCl) && (curCl < maxCluster)) {
+				if (visited[curCl]) {
+					// detected cycle, invalid disk, but don't crash on it
+					return;
+				}
+				visited[curCl] = true;
 
-			unsigned logicalSector = clusterToSector(curCl);
-			for (auto i : xrange(SECTORS_PER_CLUSTER)) {
+				unsigned logicalSector = clusterToSector(curCl);
+				for (auto i : xrange(SECTORS_PER_CLUSTER)) {
+					if (offset >= msxSize) break;
+					unsigned sector = logicalSector + i;
+					assert(sector < nofSectors);
+					auto writeSize = std::min<size_t>(msxSize - offset, SECTOR_SIZE);
+					file.write(subspan(sectors[sector].raw, 0, writeSize));
+					offset += SECTOR_SIZE;
+				}
 				if (offset >= msxSize) break;
-				unsigned sector = logicalSector + i;
-				assert(sector < nofSectors);
-				auto writeSize = std::min<size_t>(msxSize - offset, SECTOR_SIZE);
-				file.write(subspan(sectors[sector].raw, 0, writeSize));
-				offset += SECTOR_SIZE;
+				curCl = readFAT(curCl);
 			}
-			if (offset >= msxSize) break;
-			curCl = readFAT(curCl);
+		}
+		// The host file is now closed, so its modification time is final.
+		// Record the resulting mtime/filesize, so the next host->emu sync
+		// doesn't mistake the file we just wrote ourselves for a host-side
+		// change. Without this, that sync would needlessly re-import the
+		// full file content and overwrite the msx-assigned directory
+		// date/time with a host-derived value (see the note in
+		// importHostFile()).
+		if (auto st = FileOperations::getStat(hostDir + hostName)) {
+			auto& mapDir = mapDirs[dirIndex];
+			mapDir.mtime    = st->st_mtime;
+			mapDir.filesize = size_t(st->st_size);
 		}
 	} catch (FileException& e) {
 		cliComm.printWarning("Error while syncing host file: ",
