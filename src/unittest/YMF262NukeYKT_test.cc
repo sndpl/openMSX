@@ -42,6 +42,15 @@ struct DualChip {
 		// 'dut' is reset by its constructor.
 	}
 
+	void resetBoth() {
+		OPL3_Reset(&ref, 49716);
+		dut.reset();
+	}
+
+	[[nodiscard]] uint64_t fastPathSamples() const {
+		return dut.getFastPathSampleCount();
+	}
+
 	void write(unsigned reg, uint8_t value) {
 		OPL3_WriteReg(&ref, uint16_t(reg), value);
 		dut.writeReg(reg, value);
@@ -274,5 +283,104 @@ TEST_CASE("YMF262 NukeYKT: bit-identical to original Nuked-OPL3")
 			d.run(55);
 		}
 		CHECK(d.comparedSamples >= 100000);
+	}
+
+	// -----------------------------------------------------------------------
+	// Silent-chip fast path. These stay bit-identical AND additionally check
+	// that the fast path did (or did not) engage where expected. See the big
+	// comment in YMF262NukeYKT.cc: the fast path targets the deep-idle state
+	// (reset-like: f_num==0 and pg_phase==0 everywhere), which is genuinely
+	// bit-silent for every waveform. A merely released voice with f_num!=0 is
+	// deliberately NOT covered (its phase keeps running and waveforms 0/4/6/7
+	// emit -1 on the negative half, so such a chip is not bit-silent).
+	// -----------------------------------------------------------------------
+	SECTION("silence: long idle from reset, then key-on (bit-exact wake-up)") {
+		DualChip d;
+		d.write(0x105, 0x01);
+		d.run(12000); // deep idle -> fast path
+		CHECK(d.fastPathSamples() > 0);
+		d.set2op(0, 0x00, 0x01, 0x01, 0x1a, 0x00, 0xf4, 0x24, 0x50,
+		         uint8_t(0x20 | (4 << 2) | 0x01), 0x30);
+		d.run(3000); // play
+		d.write(0xb0, uint8_t((4 << 2) | 0x01)); // key off
+		d.run(3000); // release
+		// 12000 idle samples, one lost to the pipeline-flush sample.
+		CHECK(d.fastPathSamples() == 11999);
+	}
+
+	SECTION("silence: vibrato + tremolo depth set while idle (LFO stays in sync)") {
+		DualChip d;
+		d.write(0x105, 0x01);
+		d.write(0xbd, 0xc0); // DAM + DVB depth on, rhythm OFF
+		d.run(8000);
+		CHECK(d.fastPathSamples() == 7999);
+		d.set2op(1, 0x00, 0xc1, 0xc1, 0x12, 0x00, 0xf2, 0x12, 0x40,
+		         uint8_t(0x20 | (3 << 2) | 0x01), 0x31);
+		d.run(3000);
+	}
+
+	SECTION("silence: rhythm mode must NOT take the fast path (still bit-exact)") {
+		DualChip d;
+		d.write(0x105, 0x01);
+		d.write(0xbd, 0x20); // rhythm on (no drum keys)
+		d.run(6000);
+		d.write(0xbd, 0x20 | 0x1f); // key all 5 drums
+		d.run(2000);
+		// Rhythm mode is excluded from the fast path.
+		CHECK(d.fastPathSamples() == 0);
+		d.write(0xbd, 0x00); // rhythm off -> back to deep idle
+		d.run(6000);
+		CHECK(d.fastPathSamples() > 0);
+	}
+
+	SECTION("silence: non-waking register writes while idle, then key-on") {
+		DualChip d;
+		d.write(0x105, 0x01);
+		d.run(4000);
+		d.write(0x40, 0x1a); // TL slot0
+		d.write(0x43, 0x05); // TL slot3
+		d.write(0xe0, 0x07); // waveform slot0 (neg-type): stays silent (phase==0)
+		d.write(0xe3, 0x04);
+		d.write(0x20, 0xf1); // AM/vib/EG-type/mult
+		d.write(0xa0, 0x00); // f_num low = 0 (stays 0)
+		d.run(4000);
+		// The writes invalidate the cache but do not wake the chip, so both
+		// 4000-sample stretches use the fast path (one flush sample overall).
+		CHECK(d.fastPathSamples() == 7999);
+		d.set2op(0, 0x00, 0x01, 0x01, 0x1a, 0x00, 0xf4, 0x24, 0x50,
+		         uint8_t(0x20 | (4 << 2) | 0x01), 0x30);
+		d.run(3000);
+	}
+
+	SECTION("silence: fast path re-engages after reset following activity") {
+		DualChip d;
+		d.write(0x105, 0x01);
+		d.set2op(0, 0x00, 0x01, 0x01, 0x1a, 0x00, 0xf4, 0x24, 0x50,
+		         uint8_t(0x20 | (4 << 2) | 0x01), 0x30);
+		d.run(2000);
+		CHECK(d.fastPathSamples() == 0); // never idle while playing
+		d.resetBoth();
+		d.write(0x105, 0x01);
+		d.run(8000);
+		CHECK(d.fastPathSamples() == 7999);
+	}
+
+	SECTION("silence: rapid idle/active toggling (flush + cache-invalidation)") {
+		DualChip d;
+		d.write(0x105, 0x01);
+		for (int rep = 0; rep < 40; ++rep) {
+			d.run(1 + (rep % 9));
+			d.set2op(0, uint8_t(rep & 7), 0x01, 0x01, 0x1a, 0x00, 0xf4, 0x24,
+			         uint8_t(0x40 + (rep & 0x1f)),
+			         uint8_t(0x20 | (4 << 2) | 0x01), 0x30);
+			d.run(20 + (rep % 5));
+			d.write(0xb0, uint8_t((4 << 2) | 0x01)); // key off
+			d.run(5 + (rep % 3));
+			d.resetBoth();
+			d.write(0x105, 0x01);
+		}
+		d.run(500);
+		CHECK(d.comparedSamples > 0);
+		CHECK(d.fastPathSamples() > 0);
 	}
 }

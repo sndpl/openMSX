@@ -2,6 +2,7 @@
 
 #include "serialize.hh"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstdint>
@@ -342,6 +343,7 @@ void YMF262::envelopeCalc(uint8_t s)
 // Phase generator (OPL3_PhaseGenerate)
 // ---------------------------------------------------------------------------
 
+template<bool RHYTHM>
 void YMF262::phaseGenerate(uint8_t s)
 {
 	Slot& sl = slot[s];
@@ -361,20 +363,24 @@ void YMF262::phaseGenerate(uint8_t s)
 	auto phase = uint16_t(sl.pg_phase >> 9);
 	if (sl.pg_reset) sl.pg_phase = 0;
 	sl.pg_phase += (basefreq * MT[sl.reg_mult]) >> 1;
-	// Rhythm mode
 	uint32_t localNoise = noise;
 	sl.pg_phase_out = phase;
+	// The hi-hat phase bits are latched every sample on real HW, independent of
+	// rhythm mode, so this stays unconditional (keeps rm_hh_bit* in sync so that
+	// enabling rhythm later is bit-exact).
 	if (s == 13) { // hh
 		rm_hh_bit2 = (phase >> 2) & 1;
 		rm_hh_bit3 = (phase >> 3) & 1;
 		rm_hh_bit7 = (phase >> 7) & 1;
 		rm_hh_bit8 = (phase >> 8) & 1;
 	}
-	if (s == 17 && (rhy & 0x20)) { // tc
-		rm_tc_bit3 = (phase >> 3) & 1;
-		rm_tc_bit5 = (phase >> 5) & 1;
-	}
-	if (rhy & 0x20) {
+	// Rhythm mode. RHYTHM==(rhy&0x20)!=0 for the whole call (see header), so the
+	// per-slot rhy test is resolved at compile time.
+	if constexpr (RHYTHM) {
+		if (s == 17) { // tc
+			rm_tc_bit3 = (phase >> 3) & 1;
+			rm_tc_bit5 = (phase >> 5) & 1;
+		}
 		uint8_t rm_xor = (rm_hh_bit2 ^ rm_hh_bit7)
 		               | (rm_hh_bit3 ^ rm_tc_bit5)
 		               | (rm_tc_bit3 ^ rm_tc_bit5);
@@ -704,6 +710,7 @@ void YMF262::writeReg(unsigned reg, uint8_t value)
 {
 	assert(reg < 512);
 	regs[reg] = value; // peekReg() mirror
+	idleConfirmed = false; // any register write may invalidate the idle predicate
 
 	uint8_t high = (reg >> 8) & 0x01;
 	uint8_t regm = reg & 0xff;
@@ -787,55 +794,9 @@ uint8_t YMF262::peekReg(unsigned reg) const
 // Per-sample generation (OPL3_Generate4Ch, OPL_QUIRK_CHANNELSAMPLEDELAY ON)
 // ---------------------------------------------------------------------------
 
-void YMF262::generateSample(std::span<int16_t, 4> pins)
+void YMF262::advanceState()
 {
-	// The right DAC pins are output one sample later than the left (this is
-	// OPL_QUIRK_CHANNELSAMPLEDELAY, which is ON in the reference build because
-	// OPL_ENABLE_STEREOEXT==0). So they read the accumulators computed at the
-	// end of the *previous* call.
-	pins[1] = clipSample(mixBuff[1]);
-	pins[3] = clipSample(mixBuff[3]);
-
-	for (uint8_t i = 0; i < 15; ++i) processSlot(i);
-
-	// left mix (pins 0 and 2: cha/chc)
-	int32_t mix0 = 0;
-	int32_t mix2 = 0;
-	for (uint8_t c = 0; c < 18; ++c) {
-		const Channel& ch = channel[c];
-		auto accm = int16_t(chanOutVal(ch.out[0]) + chanOutVal(ch.out[1])
-		                  + chanOutVal(ch.out[2]) + chanOutVal(ch.out[3]));
-		auto la = int16_t(accm & ch.cha);
-		mix0 += la;
-		mix2 += int16_t(accm & ch.chc);
-		chLeftOut[c] = la;
-	}
-	mixBuff[0] = mix0;
-	mixBuff[2] = mix2;
-
-	for (uint8_t i = 15; i < 18; ++i) processSlot(i);
-
-	pins[0] = clipSample(mixBuff[0]);
-	pins[2] = clipSample(mixBuff[2]);
-
-	for (uint8_t i = 18; i < 33; ++i) processSlot(i);
-
-	// right mix (pins 1 and 3: chb/chd)
-	int32_t mix1 = 0;
-	int32_t mix3 = 0;
-	for (uint8_t c = 0; c < 18; ++c) {
-		const Channel& ch = channel[c];
-		auto accm = int16_t(chanOutVal(ch.out[0]) + chanOutVal(ch.out[1])
-		                  + chanOutVal(ch.out[2]) + chanOutVal(ch.out[3]));
-		auto rb = int16_t(accm & ch.chb);
-		mix1 += rb;
-		mix3 += int16_t(accm & ch.chd);
-		chRightOut[c] = rb;
-	}
-	mixBuff[1] = mix1;
-	mixBuff[3] = mix3;
-
-	for (uint8_t i = 33; i < 36; ++i) processSlot(i);
+	// End-of-sample global bookkeeping (identical in the full and fast paths).
 
 	// Tremolo
 	if ((timer & 0x3f) == 0x3f) tremolopos = (tremolopos + 1) % 210;
@@ -868,14 +829,186 @@ void YMF262::generateSample(std::span<int16_t, 4> pins)
 	eg_state ^= 1;
 }
 
+template<bool RHYTHM>
+void YMF262::generateSample(std::span<int16_t, 4> pins)
+{
+	// The right DAC pins are output one sample later than the left (this is
+	// OPL_QUIRK_CHANNELSAMPLEDELAY, which is ON in the reference build because
+	// OPL_ENABLE_STEREOEXT==0). So they read the accumulators computed at the
+	// end of the *previous* call.
+	pins[1] = clipSample(mixBuff[1]);
+	pins[3] = clipSample(mixBuff[3]);
+
+	for (uint8_t i = 0; i < 15; ++i) processSlot<RHYTHM>(i);
+
+	// left mix (pins 0 and 2: cha/chc)
+	int32_t mix0 = 0;
+	int32_t mix2 = 0;
+	for (uint8_t c = 0; c < 18; ++c) {
+		const Channel& ch = channel[c];
+		auto accm = int16_t(chanOutVal(ch.out[0]) + chanOutVal(ch.out[1])
+		                  + chanOutVal(ch.out[2]) + chanOutVal(ch.out[3]));
+		auto la = int16_t(accm & ch.cha);
+		mix0 += la;
+		mix2 += int16_t(accm & ch.chc);
+		chLeftOut[c] = la;
+	}
+	mixBuff[0] = mix0;
+	mixBuff[2] = mix2;
+
+	for (uint8_t i = 15; i < 18; ++i) processSlot<RHYTHM>(i);
+
+	pins[0] = clipSample(mixBuff[0]);
+	pins[2] = clipSample(mixBuff[2]);
+
+	for (uint8_t i = 18; i < 33; ++i) processSlot<RHYTHM>(i);
+
+	// right mix (pins 1 and 3: chb/chd)
+	int32_t mix1 = 0;
+	int32_t mix3 = 0;
+	for (uint8_t c = 0; c < 18; ++c) {
+		const Channel& ch = channel[c];
+		auto accm = int16_t(chanOutVal(ch.out[0]) + chanOutVal(ch.out[1])
+		                  + chanOutVal(ch.out[2]) + chanOutVal(ch.out[3]));
+		auto rb = int16_t(accm & ch.chb);
+		mix1 += rb;
+		mix3 += int16_t(accm & ch.chd);
+		chRightOut[c] = rb;
+	}
+	mixBuff[1] = mix1;
+	mixBuff[3] = mix3;
+
+	for (uint8_t i = 33; i < 36; ++i) processSlot<RHYTHM>(i);
+
+	advanceState();
+}
+
+// ---------------------------------------------------------------------------
+// Silent-chip fast path
+//
+// Unlike the Burczynski core (which freezes state when muted), this core is
+// validated per-sample against the die-accurate reference, so the fast path
+// must leave ALL state EXACTLY as a full sample would.
+//
+// Predicate ("deep idle"), all of which must hold:
+//   * rhythm mode disabled: (rhy & 0x20) == 0
+//   * every channel:  f_num == 0
+//   * every slot:     key == 0, eg_gen == RELEASE, eg_rout == 0x1ff,
+//                     pg_phase == 0, out == 0, prout == 0, fbmod == 0
+//
+// Why this is exactly the "provably silent AND trivial-to-advance" set:
+//   - f_num == 0  =>  the phase increment (basefreq*mt)>>1 is 0 (basefreq =
+//     (f_num<<block)>>1, and vibrato range derives from f_num>>7 == 0), so
+//     pg_phase is frozen. With pg_phase == 0 the phase output is 0.
+//   - eg_rout == 0x1ff (and key==0, eg_gen==RELEASE)  =>  OPL3_EnvelopeCalc
+//     leaves eg_rout at 0x1ff (eg_off path), keeps eg_gen==RELEASE and
+//     pg_reset==0, and never triggers attack. The exp() of a >=0x1ff envelope
+//     is 0, so every waveform yields out == 0 at phase 0 (no negative-half
+//     "-1"). NOTE: a *released* voice with f_num != 0 is deliberately NOT
+//     covered - its phase keeps advancing and waveforms 0/4/6/7 emit -1 on the
+//     negative half, i.e. such a chip is genuinely not bit-silent.
+//   - With pg_phase == 0 the output stays 0 for ANY waveform, so a waveform (or
+//     TL/KSL) write during idle keeps the chip silent (out stays 0) - the fast
+//     path is robust to such writes without re-deriving out.
+//
+// Under the predicate, a full sample would change ONLY:
+//   - eg_out of every slot (recomputed from tremolo; transient, but reproduced
+//     here so the whole state stays bit-exact),
+//   - the noise LFSR (advanced once per slot, i.e. 36x),
+//   - the global LFO/timer/EG bookkeeping (advanceState()).
+// Everything else (out, prout, fbmod, pg_phase, pg_phase_out, eg_rout, eg_gen,
+// pg_reset, rm_* bits, mixBuff, chLeftOut/chRightOut) is provably unchanged, and
+// all four DAC pins are 0.
+//
+// Because no register write happens during a generate call, once the predicate
+// holds it keeps holding for the rest of the call; it can only be broken by a
+// later writeReg (which clears idleConfirmed).
+// ---------------------------------------------------------------------------
+
+bool YMF262::fullSilentScan() const
+{
+	if (rhy & 0x20) return false; // rhythm is excluded from the fast path
+	for (const Slot& sl : slot) {
+		if (sl.out || sl.prout || sl.fbmod || sl.key || sl.pg_phase ||
+		    (sl.eg_rout != 0x1ff) || (sl.eg_gen != EG_RELEASE)) {
+			return false;
+		}
+	}
+	for (const Channel& ch : channel) {
+		if (ch.f_num) return false;
+	}
+	return true;
+}
+
+bool YMF262::checkIdle()
+{
+	if (idleConfirmed) return true;      // still valid: no register write since
+	if (!fullSilentScan()) return false;
+	idleConfirmed = true;                // stays idle until the next writeReg()
+	return true;
+}
+
+void YMF262::fastSilentAdvance()
+{
+	// Reproduce exactly the state changes a full sample makes under the idle
+	// predicate: recompute eg_out for every slot (mirrors the first line of
+	// OPL3_EnvelopeCalc) and advance the noise LFSR once per slot (36x, mirrors
+	// OPL3_PhaseGenerate). eg_rout is 0x1ff here, so eg_out stays >= 0x1ff and
+	// the output remains 0.
+	for (Slot& sl : slot) {
+		sl.eg_out = uint16_t(sl.eg_rout + (sl.reg_tl << 2)
+		                     + (sl.eg_ksl >> KSLSHIFT[sl.reg_ksl])
+		                     + (sl.trem ? tremolo : 0));
+		uint32_t n = noise;
+		uint8_t n_bit = ((n >> 14) ^ n) & 0x01;
+		noise = (n >> 1) | (n_bit << 22);
+	}
+	advanceState();
+}
+
+void YMF262::generateOne(std::span<int16_t, 4> pins)
+{
+	bool idle = checkIdle();
+	// The fast path additionally requires that the *previous* sample was idle:
+	// only then are mixBuff / chLeftOut / chRightOut / prevChanRight already
+	// flushed to 0 (the chip pipeline spans two samples), so all four pins are 0.
+	if (idle && prevSampleIdle) {
+		pins[0] = pins[1] = pins[2] = pins[3] = 0;
+		fastSilentAdvance();
+		++fastPathSamples;
+	} else if (rhy & 0x20) {
+		generateSample<true>(pins);
+	} else {
+		generateSample<false>(pins);
+	}
+	prevSampleIdle = idle;
+}
+
+bool YMF262::fastSilentBlock(unsigned num)
+{
+	// Whole-call fast path: if the chip is confirmed idle AND the previous
+	// generated sample was idle (so mixBuff / chLeftOut / chRightOut /
+	// prevChanRight are already 0), every sample of this call is silent, so the
+	// caller can null all channel buffers.
+	if ((rhy & 0x20) || !prevSampleIdle || !checkIdle()) return false;
+	for (unsigned j = 0; j < num; ++j) fastSilentAdvance();
+	fastPathSamples += num;
+	// prevSampleIdle stays true; chLeftOut/chRightOut/prevChanRight stay 0.
+	return true;
+}
+
 void YMF262::generateChannels(std::span<float*, 18> bufs, unsigned num)
 {
-	// Correctness first: always render all 18 channels (never assign nullptr).
-	// A per-channel silence optimization (like the Burczynski core does
-	// globally) is possible but intentionally left out here.
+	// Silent-chip fast path: when the chip is provably idle for the whole call,
+	// advance the internal state cheaply and signal silence to the mixer by
+	// nulling the buffers (as allowed by the YMF262Core contract).
+	if (fastSilentBlock(num)) {
+		std::ranges::fill(bufs, nullptr);
+		return;
+	}
 	for (unsigned j = 0; j < num; ++j) {
 		std::array<int16_t, 4> pins; // DAC pins, only needed for state timing
-		generateSample(pins);
+		generateOne(pins);
 		for (unsigned i = 0; i < 18; ++i) {
 			// left  = this sample's cha contribution
 			// right = previous sample's chb contribution (one-sample delay,
@@ -920,6 +1053,10 @@ void YMF262::reset()
 	tremoloshift = 4;
 	rm_hh_bit2 = rm_hh_bit3 = rm_hh_bit7 = rm_hh_bit8 = 0;
 	rm_tc_bit3 = rm_tc_bit5 = 0;
+
+	idleConfirmed = false;
+	prevSampleIdle = false;
+	fastPathSamples = 0;
 
 	for (uint8_t c = 0; c < 18; ++c) channelSetupAlg(c);
 
@@ -1007,6 +1144,15 @@ void YMF262::serialize(Archive& ar, unsigned /*version*/)
 	             "rm_tc_bit3",    rm_tc_bit3,
 	             "rm_tc_bit5",    rm_tc_bit5);
 	ar.serialize_blob("registers", regs);
+
+	if constexpr (Archive::IS_LOADER) {
+		// The idle-detection cache is not serialized: a stale
+		// 'idleConfirmed' from before the load could wrongly send the
+		// loaded (possibly active) state down the fast path. Force a
+		// re-scan and a pipeline-flush sample.
+		idleConfirmed = false;
+		prevSampleIdle = false;
+	}
 }
 
 } // namespace YMF262NukeYKT

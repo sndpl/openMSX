@@ -97,7 +97,12 @@ public:
 	  * OPL3_Generate4Ch(): out[0]=left(A), out[1]=right(B), out[2]=(C),
 	  * out[3]=(D). Includes the per-pin int16 clipping and the one-sample
 	  * right-channel delay. Used by the bit-identical validation test. */
-	void generate4ChTest(std::span<int16_t, 4> out) { generateSample(out); }
+	void generate4ChTest(std::span<int16_t, 4> out) { generateOne(out); }
+
+	/** Test-only diagnostic: number of samples produced via the silent-chip
+	  * fast path since construction. Used by the unit test to assert the fast
+	  * path actually engaged. */
+	[[nodiscard]] uint64_t getFastPathSampleCount() const { return fastPathSamples; }
 
 	template<typename Archive>
 	void serialize(Archive& ar, unsigned version);
@@ -198,17 +203,32 @@ private:
 	void envelopeUpdateKSL(uint8_t s);
 
 	// --- per-sample synthesis (mirror opl3.cc OPL3_Generate4Ch and helpers) ---
+	// phaseGenerate/processSlot/generateSample are templated on whether rhythm
+	// mode is active (rhy bit5). rhy cannot change during a single generate call
+	// (register writes are interleaved *between* generateChannels() calls by the
+	// wrapper), so the template is dispatched once per call, removing the
+	// per-slot per-sample rhythm-enable test from the inner loop.
 	void slotCalcFB(uint8_t s);
 	void envelopeCalc(uint8_t s);
-	void phaseGenerate(uint8_t s);
+	template<bool RHYTHM> void phaseGenerate(uint8_t s);
 	void slotGenerate(uint8_t s);
-	void processSlot(uint8_t s) {
+	template<bool RHYTHM> void processSlot(uint8_t s) {
 		slotCalcFB(s);
 		envelopeCalc(s);
-		phaseGenerate(s);
+		phaseGenerate<RHYTHM>(s);
 		slotGenerate(s);
 	}
-	void generateSample(std::span<int16_t, 4> pins);
+	template<bool RHYTHM> void generateSample(std::span<int16_t, 4> pins);
+	// End-of-sample global bookkeeping (LFO / timer / envelope-generator clock).
+	// Shared verbatim by the full path and the silent fast path.
+	void advanceState();
+
+	// --- silent-chip fast path (see YMF262NukeYKT.cc for the exactness proof) ---
+	[[nodiscard]] bool fullSilentScan() const;
+	[[nodiscard]] bool checkIdle();
+	void fastSilentAdvance();
+	void generateOne(std::span<int16_t, 4> pins);
+	[[nodiscard]] bool fastSilentBlock(unsigned num);
 
 	[[nodiscard]] int16_t getModValue(const Slot& s) const {
 		switch (s.modSrc) {
@@ -254,6 +274,14 @@ private:
 	uint8_t rm_hh_bit8 = 0;
 	uint8_t rm_tc_bit3 = 0;
 	uint8_t rm_tc_bit5 = 0;
+
+	// Silent-chip fast-path bookkeeping. Deliberately NOT serialized: it is
+	// derived state, and the fast path produces bit-identical results to the
+	// full path, so a restored savestate can safely re-derive it (it will just
+	// take one extra full sample before re-engaging the fast path).
+	bool idleConfirmed = false;   // predicate holds AND no reg write since
+	bool prevSampleIdle = false;  // the previous generated sample was idle
+	uint64_t fastPathSamples = 0; // diagnostic counter (see getFastPathSampleCount)
 
 	// 512-byte register mirror (only used for peekReg()).
 	std::array<uint8_t, 512> regs = {};
