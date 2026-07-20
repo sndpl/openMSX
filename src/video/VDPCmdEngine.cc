@@ -1615,7 +1615,7 @@ void VDPCmdEngine::startYmmm(EmuTime time)
 	ADX = DX;
 	ANX = tmpNX;
 	nextAccessSlot(time);
-	calcFinishTime(tmpNX, tmpNY, 24 + 40);
+	calcFinishTime(tmpNX, tmpNY, 36 + 24);
 	phase = 0;
 }
 
@@ -1645,17 +1645,27 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			tmpSrc = vram.cmdReadWindow.readNP(
 			       Mode::addressOf(ADX, SY, dstExt));
 		}
-		calculator.next(Delta::D24);
+		// Grauw's paper lists '40 R 24 W' with no per-line overhead,
+		// but that does not match measurements with the 'vdpcmdx' test
+		// tool: with sprites disabled real hardware is ~30% faster
+		// than that model predicts. '36 R->W, 24 W->R, 64 per line'
+		// matches all vdpcmdx measurements (sprites on/off, screen
+		// off, vblank) within 1.5%. On the sprites-enabled slot table
+		// both timings produce the same read cadence, which is likely
+		// why the difference went unnoticed. See issue #2057 and
+		// doc/internal/vdp-cmd-timing-issue2057.md.
+		calculator.next(Delta::D36);
 		[[fallthrough]];
-	case 1:
+	case 1: {
 		if (calculator.limitReached()) [[unlikely]] { phase = 1; break; }
 		if (doPset) [[likely]] {
 			vram.cmdWrite(Mode::addressOf(ADX, DY, dstExt),
 			              tmpSrc, calculator.getTime());
 		}
 		ADX += TX;
+		Delta delta = Delta::D24;
 		if (--ANX == 0) {
-			// note: going to the next line does not take extra time
+			delta = Delta::D88; // 24 + 64
 			SY += TY; DY += TY; --NY;
 			ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
@@ -1663,13 +1673,14 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 				break;
 			}
 		}
-		calculator.next(Delta::D40);
+		calculator.next(delta);
 		goto loop;
+	}
 	default:
 		UNREACHABLE;
 	}
 	engineTime = calculator.getTime();
-	calcFinishTime(tmpNX, tmpNY, 24 + 40);
+	calcFinishTime(tmpNX, tmpNY, 36 + 24);
 
 	/*
 	if (dstExt) [[unlikely]] {

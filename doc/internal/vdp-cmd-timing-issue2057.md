@@ -202,7 +202,72 @@ Known remaining deviations (pre-existing, out of scope for this fix):
   above): with CPU slot-stealing in play, the D48 rule overshoots. A
   proper fix needs the reserve-16-cycles-ahead CPU-priority model, at
   which point the LMMM rule may fall out of the same mechanism.
+  ANALYZED AND EXPLAINED in addendum (3) below.
 - YMMM with sprites off is ~25% too SLOW in openMSX (2870 vs real
   3797 landscape, 2871 vs 3689 portrait) — real HW is much faster than
-  Grauw's '40R 24W' deltas allow on the 88-slot table. Untouched here;
-  deserves its own investigation and possibly re-measurement.
+  Grauw's '40R 24W' deltas allow on the 88-slot table.
+  ANALYZED AND FIXED in addendum (3) below.
+
+## Addendum 2026-07-20 (3): both remaining deviations analyzed
+
+### YMMM: Grauw's deltas are wrong — fixed
+
+No (R->W, W->R) delta pair with zero line overhead fits the
+measurements (best possible: 19% error). Extending the search with a
+per-line overhead parameter finds that
+
+    read -36-> write -24-> next read, +64 extra per line
+
+fits ALL eight non-CPU YMMM measurements (sprites on/off, screen off,
+vblank, both orientations) within 1.44%, where the current model
+('24 R->W, 40 W->R, 0 per line', from Grauw's table entry
+'YMMM | 40 R 24 W | 0') is up to 24% off. In other words: the two
+inter-access values in the published table are effectively swapped,
+and YMMM does have a per-line overhead (~64 cycles, like the other
+block commands) contrary to the paper's note. On the sprites-enabled
+slot table both timings happen to produce the identical read cadence,
+which is probably why the error was never noticed there. The odd value
+36 (not a multiple of 8) is what the fit requires to use the
+second-slot-of-a-pair positions (38 cycles apart) on the sprites-off
+table; the true hardware rule behind it is unknown.
+
+Implemented: new `Delta::D36` in `VDPAccessSlots.hh/.cc`, and
+`executeYmmm` now does read -D36-> write -D24-> read (D88 = 24+64 at
+line wrap). Verified with vdpcmdx (THIS vs REAL): NO-SPR 3804/3797
+(was 2870) and 3725/3689 (was 2871); NORMAL 2107/2111, 2085/2095;
+NO-SCR 3994/3996, 3912/3914 (portrait was 4012); VBLANK 2523/2512,
+2470/2461 (portrait was 2531). YMMM NORMAL+CPU still matches
+(1165/1167, 1166/1166).
+
+### LMMM+CPU (and all +CPU columns): artifact of the contention model
+
+The real-hardware +CPU numbers have a simple structure. The hammering
+loop (`OUT (#98),A` = 12 Z80 = 72 VDP cycles) issues exactly 19 CPU
+requests per 1368-cycle line. In sprites-on mode real HW then shows
+*exact slot saturation*: every command gets the remaining
+31 - 19 = 12 slots per line, i.e. 12/accesses-per-pixel pixels per
+line — HMMM/LMMV/YMMM 6.0 px/line (real 1158..1167 per frame), LMMM
+4.0 (774), HMMV 12.0 (2310). All five confirmed within 1%.
+
+Simulating Grauw's real allocation model (slot granted at its
+allocation point 16 cycles ahead; CPU priority; engine stalls on a
+pending request; see `paper_model` in the sim script) reproduces this:
+in the starved-engine limit the engine request is always pending, so
+it takes every CPU-free slot, phase-independently — and then it does
+NOT matter whether LMMM's dst-read delta is 32 or 48 (both give 768 vs
+real 774). Conclusions:
+
+- The 774->679 regression from the LMMM D48 fix exists only in
+  openMSX's simplified `stealAccessSlot` model; under the correct
+  allocation model the D48 rule is harmless with CPU load.
+- The current model is also phase-fragile: because 72 divides 19x into
+  1368, the CPU pattern phase-locks to the line, and the same build
+  produced e.g. 1156 vs 970 for HMMM NORMAL+CPU on two different runs
+  (real HW: 1160, stable). The erratic +CPU cells across openMSX runs
+  are this resonance.
+- The proper fix for every +CPU cell is implementing the paper's
+  allocation model (gap 2 in the original analysis): per-slot
+  allocation 16 cycles ahead, separate CPU/engine request buffers, CPU
+  priority, CPU request dropping. That is the invasive hot-path rework
+  the maintainer warned about; it should replace `stealAccessSlot`.
+  No code change made for this here.

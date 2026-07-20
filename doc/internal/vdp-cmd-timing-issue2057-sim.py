@@ -243,3 +243,69 @@ print(f"{'cmd':6}{'or':6}{'sim':>7}{'openMSX':>8}{'real':>7}")
 for (cmd, orient), (omsx, real) in VB.items():
     sim = sim_cmd(SLOTS_SCREEN_OFF, cmd, GEOM[orient], VBLANK_WINDOW_PAL, 300, 32)
     print(f'{cmd:6}{orient:6}{sim:7d}{omsx:8d}{real:7d}')
+
+# ---------------------------------------------------------------------------
+# Caveat 1: Grauw's allocation model (slots allocated 16 cycles in advance,
+# CPU priority, engine request buffer) under vdpcmdx's CPU hammering
+# (OUT (#98),A = 72 VDP cycles period). 'pipelined=True' posts the next
+# engine request relative to the previous *request* instead of the access
+# (bounded below by the access itself) — the starved-engine limit.
+# ---------------------------------------------------------------------------
+def paper_model(slots, cmd, nx, window, cpu_period=None, cpu_phase=0,
+                lmmm_dst_p=None, pipelined=False):
+    spec = COMMANDS[cmd]
+    deltas = list(spec['deltas'])
+    if cmd == 'LMMM' and lmmm_dst_p is not None:
+        deltas[0] = lmmm_dst_p
+    wrap_extra = spec['wrap_extra']
+    n = len(slots)
+    acc_idx = 0; col = 0; count = 0
+    eng_req = 0; eng_post = 0
+    line = 0; i = 0
+    cpu_next = cpu_phase; cpu_pending = None
+    while True:
+        s = line * LINE + slots[i]
+        alloc = s - 16
+        if alloc >= window: return count
+        while cpu_period and cpu_next <= alloc:
+            cpu_pending = cpu_next; cpu_next += cpu_period
+        if cpu_period and cpu_pending is not None:
+            cpu_pending = None                    # CPU takes the slot
+        elif eng_req <= alloc:
+            if s >= window: return count
+            d = deltas[acc_idx]
+            if acc_idx == len(deltas) - 1:
+                count += 1; col += 1
+                if col == nx: col = 0; d += wrap_extra
+            acc_idx = (acc_idx + 1) % len(deltas)
+            nxt = max(eng_post + (d - 16), s) if pipelined else s + (d - 16)
+            eng_post = nxt; eng_req = nxt
+        i += 1
+        if i == n: i = 0; line += 1
+
+# Key results (sprites-on, ACTIVE window, CPU period 72):
+#   pipelined variant, phase-independent, matches real HW within ~1%:
+#     HMMM 1152 (real 1160), LMMM 768 with dst 32 OR 48 (real 774),
+#     YMMM 1152 (1167), HMMV 2304 (2310), LMMV 1152 (1158)
+#   = exact slot saturation: engine gets (31 - 19) slots/line.
+#   The current openMSX stealAccessSlot model is phase-fragile instead
+#   (same build measured 1156 vs 970 for HMMM+CPU on different runs).
+
+# ---------------------------------------------------------------------------
+# Caveat 2: YMMM delta fit. Grid search over (R->W, W->R, per-line extra)
+# against all 8 non-CPU measurements: best fit (36, 24, +64), max err 1.44%.
+# Grauw's published '40 R 24 W', per-line 0 (max err 24%) has the two
+# inter-access values effectively swapped and misses the per-line overhead.
+# On the sprites-on table both variants give the same read cadence.
+# ---------------------------------------------------------------------------
+def sim_ymmm(slots, nx, window, d_rw, d_wr, wrap, start=300):
+    t = next_slot(slots, start, 0)
+    count = 0; col = 0
+    while True:
+        t = next_slot(slots, t, d_rw)          # write, d_rw after read
+        if t >= window: return count
+        count += 1; col += 1
+        d = d_wr + (wrap if col == nx else 0)
+        if col == nx: col = 0
+        t = next_slot(slots, t, d)             # next read
+        if t >= window: return count
