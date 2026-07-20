@@ -1122,6 +1122,18 @@ void VDPCmdEngine::executeLmmm(EmuTime limit)
 	unsigned dstAddr = Mode::addressOf(ADX, DY, dstExt);
 	auto calculator = getSlotCalculator(limit);
 
+	// With sprite rendering enabled the destination read cannot use the
+	// access slot 32 cycles after the source read; it only executes 48 or
+	// more cycles later. Grauw's measurements ('64R 32R 24W') did not
+	// cover this case; the '32' only holds when the sprite fetches are
+	// disabled. Derived from and verified against real-hardware
+	// measurements with the 'vdpcmdx' test tool, see issue #2057 and
+	// doc/internal/vdp-cmd-timing-issue2057.md.
+	Delta dstReadDelta =
+		(!vdp.isMSX1VDP() && vdp.getDisplayMode().isBitmapMode() &&
+		 vdp.isDisplayEnabled() && vdp.spritesEnabledRegister())
+		? Delta::D48 : Delta::D32;
+
 	switch (phase) {
 	case 0:
 loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
@@ -1130,7 +1142,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		} else {
 		       tmpSrc = 0xFF;
 		}
-		calculator.next(Delta::D32);
+		calculator.next(dstReadDelta);
 		[[fallthrough]];
 	case 1:
 		if (calculator.limitReached()) [[unlikely]] { phase = 1; break; }
