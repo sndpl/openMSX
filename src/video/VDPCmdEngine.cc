@@ -1124,7 +1124,8 @@ void VDPCmdEngine::executeLmmm(EmuTime limit)
 
 	// With sprite rendering enabled the destination read cannot use the
 	// access slot 32 cycles after the source read; it only executes 48 or
-	// more cycles later. Grauw's measurements ('64R 32R 24W') did not
+	// more cycles later. The timing paper's measurements ('64R 32R 24W',
+	// see doc/internal/vdp-vram-timing/) did not
 	// cover this case; the '32' only holds when the sprite fetches are
 	// disabled. Derived from and verified against real-hardware
 	// measurements with the 'vdpcmdx' test tool, see issue #2057 and
@@ -1645,7 +1646,8 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			tmpSrc = vram.cmdReadWindow.readNP(
 			       Mode::addressOf(ADX, SY, dstExt));
 		}
-		// Grauw's paper lists '40 R 24 W' with no per-line overhead,
+		// The VRAM timing paper lists '40 R 24 W' with no per-line
+		// overhead (doc/internal/vdp-vram-timing/),
 		// but that does not match measurements with the 'vdpcmdx' test
 		// tool: with sprites disabled real hardware is ~30% faster
 		// than that model predicts. '36 R->W, 24 W->R, 64 per line'

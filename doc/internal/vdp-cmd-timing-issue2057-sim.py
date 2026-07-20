@@ -3,8 +3,8 @@
 VDPAccessSlots.cc) and compare with vdpcmdx measurements (issue #2057).
 
 Model: each VRAM access happens on an access slot. After an access at time t,
-the next access happens at the first slot >= t + delta (delta from Grauw's
-measurements). Line length = 1368 VDP ticks.
+the next access happens at the first slot >= t + delta (deltas from the VDP
+VRAM timing paper by Wouter Vermaelen / m9710797, hosted on map.grauw.nl). Line length = 1368 VDP ticks.
 """
 import bisect
 
@@ -245,7 +245,7 @@ for (cmd, orient), (omsx, real) in VB.items():
     print(f'{cmd:6}{orient:6}{sim:7d}{omsx:8d}{real:7d}')
 
 # ---------------------------------------------------------------------------
-# Caveat 1: Grauw's allocation model (slots allocated 16 cycles in advance,
+# Caveat 1: the paper's allocation model (slots allocated 16 cycles in advance,
 # CPU priority, engine request buffer) under vdpcmdx's CPU hammering
 # (OUT (#98),A = 72 VDP cycles period). 'pipelined=True' posts the next
 # engine request relative to the previous *request* instead of the access
@@ -294,7 +294,7 @@ def paper_model(slots, cmd, nx, window, cpu_period=None, cpu_phase=0,
 # ---------------------------------------------------------------------------
 # Caveat 2: YMMM delta fit. Grid search over (R->W, W->R, per-line extra)
 # against all 8 non-CPU measurements: best fit (36, 24, +64), max err 1.44%.
-# Grauw's published '40 R 24 W', per-line 0 (max err 24%) has the two
+# The paper's published '40 R 24 W', per-line 0 (max err 24%) has the two
 # inter-access values effectively swapped and misses the per-line overhead.
 # On the sprites-on table both variants give the same read cadence.
 # ---------------------------------------------------------------------------

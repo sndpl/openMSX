@@ -21,7 +21,9 @@ missing rule in the model, and a lot of measurement-driven work.
 
 ## How openMSX models command timing today
 
-The model is directly derived from Grauw's VDP VRAM timing paper (in-tree
+The model is directly derived from the VDP VRAM timing paper by Wouter
+Vermaelen (m9710797, measurements together with Joost; hosted on
+map.grauw.nl) (in-tree
 copy: doc/internal/vdp-vram-timing/vdp-timing.html) and lives in:
 
 - `src/video/VDPAccessSlots.cc` — tables of the real VRAM access-slot
@@ -30,7 +32,7 @@ copy: doc/internal/vdp-vram-timing/vdp-timing.html) and lives in:
   slot at least N cycles away" lookup table.
 - `src/video/VDPCmdEngine.cc` — each block command walks pixel by pixel;
   every VRAM access advances `engineTime` to the next real slot with the
-  per-access minimum delays from Grauw's measurements (LMMM = 64R/32R/24W per
+  per-access minimum delays from the paper's measurements (LMMM = 64R/32R/24W per
   pixel + 64 per line, etc. — the constants match the paper exactly).
   Execution is lazy: the engine only advances when software observes it
   (status register S#2, VRAM access, register writes).
@@ -48,7 +50,7 @@ Ranked by likelihood of explaining the reported discrepancy:
 
 1. **No command-startup / first-line overhead.** Every `start*` function
    (e.g. `startLmmm`) begins the first pixel at the very next access slot
-   with zero setup cost. Grauw's paper explicitly flags this as unmeasured
+   with zero setup cost. The paper explicitly flags this as unmeasured
    and says it is logical to assume the per-line overhead (64 cycles for
    LMMM) also applies at command start, possibly plus a per-command
    constant. Best candidate for the command-only discrepancy the issue
@@ -67,7 +69,7 @@ Ranked by likelihood of explaining the reported discrepancy:
    the same access slot" and effectively skip slot accounting. Not what the
    issue measures (it uses LMMM/HMMM), but part of the same cleanup.
 
-4. **Minor:** openMSX implements Grauw's *minimum* measured delays; if real
+4. **Minor:** openMSX implements the paper's *minimum* measured delays; if real
    chips have systematic overhead above those minimums, everything runs
    slightly fast. Also SRCH/PSET deltas are marked `// TODO`, and the ImGui
    block-command overlay is approximate by design
@@ -161,7 +163,7 @@ Result — a single minimal rule reproduces real HW within +-2 pixels:
 
     LMMM's source-read -> destination-read spacing is >= 48 cycles
     (not >= 32) when sprite rendering is enabled. All other commands
-    and all other modes keep Grauw's published deltas.
+    and all other modes keep the paper's published deltas.
 
 Evidence and eliminated alternatives:
 
@@ -173,7 +175,7 @@ Evidence and eliminated alternatives:
   cycles away IS used, e.g. slot 92 -> 162).
 - Applying 48 globally (all modes) breaks sprites-off (1659 vs 1971)
   and screen-off (1851 vs 2004), so the +16 penalty only exists with
-  the sprite-fetch pattern on the bus. Grauw's paper already hints at
+  the sprite-fetch pattern on the bus. The paper already hints at
   related unexplained behavior: the sprites-on slot at cycle 170 is
   "rarely actually used" on real HW even when the engine is starved.
   The physical mechanism (likely an interaction between the engine's
@@ -205,12 +207,12 @@ Known remaining deviations (pre-existing, out of scope for this fix):
   ANALYZED AND EXPLAINED in addendum (3) below.
 - YMMM with sprites off is ~25% too SLOW in openMSX (2870 vs real
   3797 landscape, 2871 vs 3689 portrait) — real HW is much faster than
-  Grauw's '40R 24W' deltas allow on the 88-slot table.
+  the paper's '40R 24W' deltas allow on the 88-slot table.
   ANALYZED AND FIXED in addendum (3) below.
 
 ## Addendum 2026-07-20 (3): both remaining deviations analyzed
 
-### YMMM: Grauw's deltas are wrong — fixed
+### YMMM: the paper's deltas don't match — fixed
 
 No (R->W, W->R) delta pair with zero line overhead fits the
 measurements (best possible: 19% error). Extending the search with a
@@ -220,7 +222,7 @@ per-line overhead parameter finds that
 
 fits ALL eight non-CPU YMMM measurements (sprites on/off, screen off,
 vblank, both orientations) within 1.44%, where the current model
-('24 R->W, 40 W->R, 0 per line', from Grauw's table entry
+('24 R->W, 40 W->R, 0 per line', from the paper's table entry
 'YMMM | 40 R 24 W | 0') is up to 24% off. In other words: the two
 inter-access values in the published table are effectively swapped,
 and YMMM does have a per-line overhead (~64 cycles, like the other
@@ -249,7 +251,7 @@ requests per 1368-cycle line. In sprites-on mode real HW then shows
 line — HMMM/LMMV/YMMM 6.0 px/line (real 1158..1167 per frame), LMMM
 4.0 (774), HMMV 12.0 (2310). All five confirmed within 1%.
 
-Simulating Grauw's real allocation model (slot granted at its
+Simulating the paper's real allocation model (slot granted at its
 allocation point 16 cycles ahead; CPU priority; engine stalls on a
 pending request; see `paper_model` in the sim script) reproduces this:
 in the starved-engine limit the engine request is always pending, so
@@ -271,3 +273,55 @@ real 774). Conclusions:
   priority, CPU request dropping. That is the invasive hot-path rework
   the maintainer warned about; it should replace `stealAccessSlot`.
   No code change made for this here.
+
+## Addendum 2026-07-20 (4): answers to review questions (PR feedback)
+
+Attribution correction: the VRAM timing paper and its measurements are by
+Wouter Vermaelen (m9710797, together with Joost); map.grauw.nl only hosts
+the document. Earlier revisions of this file said "Grauw's paper".
+
+Three findings from re-testing the reviewer's alternative hypotheses in
+the simulator:
+
+1. "Always use D48 for LMMM?" — No: it breaks sprites-off (sim 1659 vs
+   real 1971) and screen-off (1851 vs 2004). The 32-cycle spacing is
+   definitely correct on the dense tables.
+
+2. "Maybe the sprites-on slot table is wrong instead?" — This WORKS as an
+   alternative explanation. Shifting only the middle slot of each
+   32/32-triplet (cycles 220, 348, 476, 604, 732, 860, 988, 1116) 4 or 8
+   cycles EARLIER reproduces all ten sprites-on measurements with the
+   original unconditional deltas — no conditional D48 needed:
+   LMMM 1341/1334 (real 1339/1332), HMMM 1918 (1915), YMMM 2109 (2111),
+   HMMV 4013/3930 (4005/3922), LMMV 1911/1872 (1908/1869). The vdpcmdx
+   data cannot distinguish "middle slots are 4-8 cycles earlier" from
+   "LMMM's dst read needs >32 cycles"; only a bus-level measurement can.
+   The key property either way: LMMV's write (>=24 after its read) must
+   still reach the middle slot, while LMMM's dst read (>=32 after its
+   read) must miss it.
+
+3. The YMMM value 36 is not really "36": the measurements only pin the
+   read->write threshold to the range 33..38 (<=32 is too fast on both
+   the sprites-off and screen-off tables, >=39 too slow on sprites-off).
+   That is exactly "strictly more than 32 cycles" — so the underlying
+   value may well be the multiple-of-8 value 32 combined with an
+   exclusive boundary in slot granting (e.g. a request posted exactly at
+   an allocation point missing that slot), rather than a genuine
+   non-multiple-of-8 delay. Possibly the same boundary phenomenon as the
+   LMMM case (32 + something small), which would unify both fixes.
+
+How to validate on real hardware:
+
+- Bus-level capture (the original paper's logic-analyzer setup) of one
+  LMMM in sprites-on mode directly decides between the two explanations
+  in (2): either the middle slots sit at +28 (not +32), or the dst read
+  skips them. Same for YMMM on the sprites-off table (write landing on
+  the pair-second slots 38 cycles after the read).
+- Software-only, out-of-sample tests with vdpcmdx variants (bengalack
+  has NMS-8245, FS-A1, HB-F1XDJ): change the block sizes/widths, use
+  212-line mode, screen 5 instead of 8, other logical ops, 60Hz. The
+  simulator can publish predicted numbers BEFORE the hardware runs;
+  matching predictions on cases not used for calibration is strong
+  validation.
+- More chips: V9958 machines and other V9938 batches, to see whether the
+  behavior is uniform.
