@@ -325,3 +325,76 @@ How to validate on real hardware:
   validation.
 - More chips: V9958 machines and other V9938 batches, to see whether the
   behavior is uniform.
+
+## Addendum 2026-07-22 (5): constraint bands, not point values; a pinning test
+
+Review feedback (rightly) criticized presenting fitted point values as
+conclusions. This section states what the measurements actually
+constrain, corrects an overclaim in addendum (3), and proposes a new
+hardware test that pins the values further.
+
+### What the data actually pins down
+
+LMMM, sprites-on destination read (under the conditional-delta
+hypothesis): any effective minimum spacing in **33..65** cycles
+reproduces the measurements (1341/1334 sim vs 1339/1332 real); 32 gives
+1724/1706 and >=66 gives 1149/1144. The implemented `D48` is one
+representative. The slot-table-shift hypothesis of addendum (4) remains
+an equivalent alternative.
+
+YMMM: exhaustive search at 1-cycle resolution finds exactly two
+solution families within 2% of all 8 non-CPU measurements:
+
+- family A: R->W in 33..38, W->R in 17..24, per-line 56..88
+  (best member 1.44%) — the "swapped values" reading of addendum (3);
+- family B: R->W in 17..24, W->R in 33..38, per-line 64..88
+  (best member 0.64%).
+
+The "swapped" claim in addendum (3) was too strong: family B keeps the
+paper's R->W = 24 unchanged and only replaces the 40 with a value in
+33..38 — it deviates less from the paper AND fits better. The
+implementation now uses family B: read -D24-> write -D36-> next read,
+D104 (= 36 + 68) at line wrap. Emulator verification (vdpcmdx, THIS vs
+REAL): NORMAL 2109/2111 and 2093/2095, NO-SPR 3796/3797 and 3686/3689,
+NO-SCR 3994/3996 and 3912/3914, VBLANK 2523/2512 and 2471/2461 — every
+YMMM cell within 3 pixels.
+
+Note both anomalies are consistent with a threshold "strictly more than
+32" (LMMM band 33..65, YMMM band 33..38 both contain 33), which could
+point at an exclusive boundary in slot granting rather than a new delay
+value — but the YMMM band's upper limit 38 and the LMMM dense-table
+behavior (exactly 32 works there) mean neither is a clean universal
+rule yet.
+
+### Proposed test: equivalent-time sampling of command completion
+
+vdpcmdx measures whole-frame throughput, which cannot separate
+solutions inside the bands above. The following software-only test can
+(no logic analyzer needed):
+
+1. HALT-sync to the line interrupt (deterministic Z80 interrupt
+   latency), then burn a programmable number of cycles with a NOP sled.
+2. Start a tiny command (e.g. YMMM of 4 pixels, or LMMM of 1 pixel) at
+   that controlled phase within the scanline.
+3. Read S#2 once at a second programmable delay and record the CE bit
+   (busy/done — a single binary sample, no polling loop).
+4. Sweep both delays in 1-Z80-cycle (6 VDP cycles) steps over many
+   frames. The CE transition point as a function of start phase is a
+   fingerprint of the engine's per-access slot usage.
+
+Simulated discrimination power (completion-time difference >= 12 VDP
+cycles, sweeping the 228 possible start phases):
+
+- YMMM family A vs family B (4 px, sprites off): 212/228 phases differ,
+  up to 58 cycles — trivially separable.
+- LMMM conditional-D48 vs shifted-slot-table (1 px, sprites on): 32..38
+  of 228 phases differ, up to 52 cycles — separable at specific phases.
+- Within the YMMM 33..38 band: the 10-cycle slot gaps near the end of
+  the sprites-off line make {33,34} vs {35,36} vs {37,38} separable
+  (1-2 phases each); inside those pairs natural slot geometry offers no
+  discriminating offsets, so the exact value needs a bus-level capture.
+
+The same setup with NY=2 vs NY=1 measures the per-line overhead
+directly, and with delay-0 it measures the command startup overhead —
+i.e. it also addresses gap 1 of the original analysis, which no
+existing test covers.

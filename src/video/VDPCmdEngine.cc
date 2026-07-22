@@ -1123,12 +1123,16 @@ void VDPCmdEngine::executeLmmm(EmuTime limit)
 	auto calculator = getSlotCalculator(limit);
 
 	// With sprite rendering enabled the destination read cannot use the
-	// access slot 32 cycles after the source read; it only executes 48 or
-	// more cycles later. The timing paper's measurements ('64R 32R 24W',
-	// see doc/internal/vdp-vram-timing/) did not
-	// cover this case; the '32' only holds when the sprite fetches are
-	// disabled. Derived from and verified against real-hardware
-	// measurements with the 'vdpcmdx' test tool, see issue #2057 and
+	// access slot exactly 32 cycles after the source read; the
+	// measurements constrain the effective minimum spacing to somewhere
+	// in 33..65 cycles (48 chosen). The timing paper's measurements
+	// ('64R 32R 24W', see doc/internal/vdp-vram-timing/) did not cover
+	// this case; the '32' only holds when the sprite fetches are
+	// disabled. An alternative explanation with identical observable
+	// behavior is that the middle slot of each 32/32 slot-triplet sits a
+	// few cycles earlier than in the measured table. Derived from and
+	// verified against real-hardware measurements with the 'vdpcmdx'
+	// test tool, see issue #2057 and
 	// doc/internal/vdp-cmd-timing-issue2057.md.
 	Delta dstReadDelta =
 		(!vdp.isMSX1VDP() && vdp.getDisplayMode().isBitmapMode() &&
@@ -1647,16 +1651,18 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			       Mode::addressOf(ADX, SY, dstExt));
 		}
 		// The VRAM timing paper lists '40 R 24 W' with no per-line
-		// overhead (doc/internal/vdp-vram-timing/),
-		// but that does not match measurements with the 'vdpcmdx' test
-		// tool: with sprites disabled real hardware is ~30% faster
-		// than that model predicts. '36 R->W, 24 W->R, 64 per line'
-		// matches all vdpcmdx measurements (sprites on/off, screen
-		// off, vblank) within 1.5%. On the sprites-enabled slot table
-		// both timings produce the same read cadence, which is likely
-		// why the difference went unnoticed. See issue #2057 and
+		// overhead (doc/internal/vdp-vram-timing/), but that does not
+		// match measurements with the 'vdpcmdx' test tool: with
+		// sprites disabled real hardware is ~30% faster than that
+		// model predicts. The measurements constrain the timing to:
+		// R->W unchanged (24), W->R somewhere in 33..38 (36 chosen)
+		// instead of 40, plus a per-line overhead of ~68 cycles. This
+		// fits all 8 non-CPU vdpcmdx measurements within 0.7%. On the
+		// sprites-enabled slot table old and new timing produce the
+		// same cadence, which is likely why the difference went
+		// unnoticed. See issue #2057 and
 		// doc/internal/vdp-cmd-timing-issue2057.md.
-		calculator.next(Delta::D36);
+		calculator.next(Delta::D24);
 		[[fallthrough]];
 	case 1: {
 		if (calculator.limitReached()) [[unlikely]] { phase = 1; break; }
@@ -1665,9 +1671,9 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			              tmpSrc, calculator.getTime());
 		}
 		ADX += TX;
-		Delta delta = Delta::D24;
+		Delta delta = Delta::D36;
 		if (--ANX == 0) {
-			delta = Delta::D88; // 24 + 64
+			delta = Delta::D104; // 36 + 68
 			SY += TY; DY += TY; --NY;
 			ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {

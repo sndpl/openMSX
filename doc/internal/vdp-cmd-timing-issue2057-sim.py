@@ -3,8 +3,8 @@
 VDPAccessSlots.cc) and compare with vdpcmdx measurements (issue #2057).
 
 Model: each VRAM access happens on an access slot. After an access at time t,
-the next access happens at the first slot >= t + delta (deltas from the VDP
-VRAM timing paper by Wouter Vermaelen / m9710797, hosted on map.grauw.nl). Line length = 1368 VDP ticks.
+the next access happens at the first slot >= t + delta (delta from Grauw's
+measurements). Line length = 1368 VDP ticks.
 """
 import bisect
 
@@ -245,7 +245,7 @@ for (cmd, orient), (omsx, real) in VB.items():
     print(f'{cmd:6}{orient:6}{sim:7d}{omsx:8d}{real:7d}')
 
 # ---------------------------------------------------------------------------
-# Caveat 1: the paper's allocation model (slots allocated 16 cycles in advance,
+# Caveat 1: Grauw's allocation model (slots allocated 16 cycles in advance,
 # CPU priority, engine request buffer) under vdpcmdx's CPU hammering
 # (OUT (#98),A = 72 VDP cycles period). 'pipelined=True' posts the next
 # engine request relative to the previous *request* instead of the access
@@ -294,7 +294,7 @@ def paper_model(slots, cmd, nx, window, cpu_period=None, cpu_phase=0,
 # ---------------------------------------------------------------------------
 # Caveat 2: YMMM delta fit. Grid search over (R->W, W->R, per-line extra)
 # against all 8 non-CPU measurements: best fit (36, 24, +64), max err 1.44%.
-# The paper's published '40 R 24 W', per-line 0 (max err 24%) has the two
+# Grauw's published '40 R 24 W', per-line 0 (max err 24%) has the two
 # inter-access values effectively swapped and misses the per-line overhead.
 # On the sprites-on table both variants give the same read cadence.
 # ---------------------------------------------------------------------------
@@ -309,3 +309,22 @@ def sim_ymmm(slots, nx, window, d_rw, d_wr, wrap, start=300):
         if col == nx: col = 0
         t = next_slot(slots, t, d)             # next read
         if t >= window: return count
+
+# ---------------------------------------------------------------------------
+# Constraint bands (addendum 5): what the vdpcmdx data actually pins down.
+# LMMM sprites-on dst read: any threshold in 33..65 fits (48 implemented).
+# YMMM: two families within 2% of all 8 cells (1-cycle-resolution search):
+#   A: R->W 33..38, W->R 17..24, line 56..88 (best 1.44%)
+#   B: R->W 17..24, W->R 33..38, line 64..88 (best 0.64%)  <- implemented
+#     as read -24-> write -36-> next read, +68 per line (= D24/D36/D104).
+# Equivalent-time-sampling test (completion time vs start phase, 6-cycle
+# sweep): YMMM A-vs-B differ at 212/228 phases (<=58 cycles); LMMM D48 vs
+# middle-slot-shift differ at 32..38/228 phases (<=52 cycles); YMMM band
+# splits into {33,34},{35,36},{37,38} via the 10-cycle end-of-line gaps.
+def completion_fingerprint(slots, phase, accesses):
+    """Completion time of a short command started at 'phase'; 'accesses' is
+    the flat list of deltas before each access after the first."""
+    t = next_slot(slots, phase, 0)
+    for d in accesses:
+        t = next_slot(slots, t, d)
+    return t - phase
