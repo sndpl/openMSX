@@ -398,3 +398,48 @@ The same setup with NY=2 vs NY=1 measures the per-line overhead
 directly, and with delay-0 it measures the command startup overhead —
 i.e. it also addresses gap 1 of the original analysis, which no
 existing test covers.
+
+## Addendum 2026-07-24 (6): cross-check against the 2013 raw captures
+
+Wouter Vermaelen published the original measurement data:
+https://github.com/m9710797/vdp-timing-measurements. Checking the YMMM
+conclusions of this analysis against those raw captures
+(8.final-analysis/*YMMM*.txt, parsed with
+`vdp-cmd-timing-issue2057-capture-check.py`):
+
+- Steady-state gaps: R->W = 24 (with a few 26), W->R = 40 (with
+  slot-availability variants 42/44/56). Fully consistent with the
+  implemented model: all YMMM captures are in screen-off mode, where
+  every W->R threshold in 33..40 realizes as exactly 40 on the 8-cycle
+  slot grid — the captures cannot distinguish 36 from 40 (the writeup
+  itself notes the method's 8-cycle accuracy). The value <=38 is pinned
+  only by the vdpcmdx sprites-off cells (the slots 38 cycles after a
+  write on that table).
+
+- Per-line overhead: the 2013 captures CONFIRM it. Three
+  rectangle-line-transition events exist in the captures
+  (screen5screenoffYMMM3, screen8screenoffYMMM1, screen8screenoffYMMM6),
+  recognizable by the read address crossing a VRAM line boundary
+  (0x0e47f->0x0e480 with 128-byte lines, 0x185ff->0x18600 and
+  0x1e8ff->0x1e900 with 256-byte lines). Their W->R gaps are 108, 104,
+  108 cycles instead of 40 — an extra ~64-68 cycles, exactly the fitted
+  wrap value. The implemented D104 (36+68) predicts the observed
+  next-read slot positions cycle-exactly in all three cases (cycles 33,
+  805, 165). Each ~4-line capture contains only one such event, which
+  is presumably why the original analysis concluded 'no per-line
+  overhead' for YMMM.
+
+- Coverage: the 2013 command captures are all screen-off (plus HMMV in
+  other modes). There are NO sprites-on LMMM captures and NO sprites-off
+  YMMM captures — precisely the two configurations where vdpcmdx found
+  discrepancies. The 2013 data and the vdpcmdx data are therefore fully
+  consistent with each other and with the implemented model; each
+  covers the other's blind spot.
+
+Direction clarification (review question): vdpcmdx's THIS column is
+openMSX and REAL is hardware; for YMMM sprites-off THIS < REAL
+(2870 < 3797), i.e. openMSX was too SLOW there, while slightly too fast
+in the portrait screen-off/vblank cells. The change speeds up the
+steady state only where slots 33..38 cycles after a write exist (the
+sprites-off table) and slows down line transitions everywhere — which
+is what the per-line overhead events in the 2013 captures show.
