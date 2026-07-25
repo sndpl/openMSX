@@ -11,8 +11,9 @@ This document argues from two sources:
 * [bengalack/vdpcmdx](https://github.com/bengalack/vdpcmdx), which measures how many
   pixels the command engine completes per frame on real hardware and in an emulator.
 
-No code changes are proposed *in* this document; it describes the root cause, the
-change that follows from it, the numbers to expect, and what still needs measuring.
+It describes the root cause of both deviations, the change made to fix them, the
+measured result, and what still needs measuring to turn the LMMM rule from fitted into
+derived.
 
 ## 1. What the tool measures
 
@@ -260,10 +261,7 @@ deviation untouched; `L = 12` or below introduces new errors of up to 9% in LMMV
 HMMM with sprites off. Moving the B-grid to `212` while keeping `L = 16` gives exactly
 the same fit as `L = 14`.
 
-## 7. The change this implies
-
-Nothing here has been applied. For the record, the change that follows from sections 4
-and 5:
+## 7. The change
 
 * **`src/video/VDPAccessSlots.hh` / `.cc`** — re-base the command-engine deltas from
   `work + 16` to `work + 14`:
@@ -271,22 +269,64 @@ and 5:
   `D88 -> D86`, `D104 -> D102`, `D120 -> D118`, `D128 -> D126`, `D136 -> D134`.
   Leave `D0`, `D1`, `D16` (V99x8 CPU) and `D28` (TMS99x8 CPU) alone — the CPU path has
   its own tuning and its own evidence in `8.final-analysis/slots3.txt`.
-* Add **one** delta for LMMM's destination read, built with the extra condition *"if the
-  chosen slot is the first slot after `i`, require `slots[p] - i >= step + 8`"*. This is
-  roughly ten lines in the `CycleTable` constructor plus `NUM_DELTAS 15 -> 16`. It fits
-  the existing lookup-table design because the rule depends only on the current tick,
-  which in the command engine is always the previous access slot.
+* One delta, `D30_NI`, carries the rule from section 5.2: *"if the chosen slot is the
+  first slot after `i`, require `slots[p] - i >= step + 8`"*. It fits the existing
+  lookup-table design because the rule depends only on the current tick, which in the
+  command engine is always the previous access slot, so `CycleTable` can precompute it
+  like any other delta. `NUM_DELTAS` stays 15: the plain `D32` had exactly one user
+  (LMMM's destination read) and `D30_NI` replaces it.
 * **`src/video/VDPCmdEngine.cc`** — update the 20 `Delta::Dxx` uses
   (`rg -n 'Delta::D' src/video/VDPCmdEngine.cc`) and, for consistency, the
   `calcFinishTime()` `ticksPerPixel` arguments (`24 + 40`, `64 + 32 + 24`, `48`, …).
   Those only feed `statusChangeTime`, which is documented as a lower bound.
-* Update the comment block at `src/video/VDPAccessSlots.cc:8-13` to note that the
-  command-engine deltas are *not* `work + 16`, and why.
+* The `Delta` enum carries a comment explaining that the values are
+  `work + 14`, that the original measurements only determined them modulo 8, and what
+  `D30_NI` means.
 
-Verify by building (`make staticbindist`) and running `vdpcmdx` against the predicted
-numbers in section 6.
+## 8. Measured result
 
-## 8. What would confirm the mechanism
+Built and run on a Philips NMS 8255 (PAL) with `vdpcmdx.dsk`. ACTIVE block, the three
+conditions without CPU contention:
+
+| # | command | NORMAL THIS/REAL | NO SPR THIS/REAL | NO SCR THIS/REAL |
+|---|---|---|---|---|
+| 1 | HMMM (landscape) | 1915 / 1915 | 2668 / 2673 | 2853 / 2854 |
+| 2 | **LMMM** (landscape) | **1340 / 1339** | 1970 / 1971 | 2003 / 2004 |
+| 3 | **YMMM** (landscape) | 2111 / 2111 | **3819 / 3797** | 4009 / 3996 |
+| 4 | HMMV (landscape) | 4002 / 4005 | 4203 / 4195 | 5311 / 5313 |
+| 5 | LMMV (landscape) | 1906 / 1908 | 2104 / 2106 | 2666 / 2668 |
+| 6 | HMMM (portrait) | 1915 / 1916 | 2636 / 2659 | 2795 / 2796 |
+| 7 | **LMMM** (portrait) | **1333 / 1332** | 1954 / 1955 | 1993 / 1993 |
+| 8 | **YMMM** (portrait) | 2111 / 2095 | **3819 / 3689** | 4009 / 3914 |
+| 9 | HMMV (portrait) | 3920 / 3922 | 4172 / 4120 | 5093 / 5094 |
+| 10 | LMMV (portrait) | 1867 / 1869 | 2105 / 2106 | 2627 / 2627 |
+
+The two target cells:
+
+| | before | after | real |
+|---|---|---|---|
+| LMMM `NORMAL`, landscape | 1718 (+28.8%) | **1340 (+0.1%)** | 1339 |
+| LMMM `NORMAL`, portrait | 1700 (+28.2%) | **1333 (+0.1%)** | 1332 |
+| YMMM `NO SPR`, landscape | 2873 (-24.2%) | **3819 (+0.6%)** | 3797 |
+| YMMM `NO SPR`, portrait | 2871 (-21.9%) | **3819 (+3.5%)** | 3689 |
+
+Everything else stays within ~1.3%, except the YMMM portrait column, which keeps its
+pre-existing +2.4..+3.5% (see section 10). The VBLANK block is unchanged. The
+simulator of section 6 predicted 1343 / 1335 / 3840, so it was accurate to within 0.6%.
+
+**Side effect on the CPU-contention columns.** Those were already wrong by -16%..+7%
+before this change (section 10) and moving the deltas reshuffles which slot the engine
+competes for, so several cells moved — three notably closer (`NORMAL+CPU` HMMM
+landscape -8.3% -> -0.3%, YMMM landscape -8.1% -> 0.0%, HMMV landscape -16.1% -> -8.1%),
+four notably further (HMMM portrait -1.3% -> -16.4%, HMMV portrait -7.7% -> -15.2%, LMMM
+landscape 0.0% -> -12.3%, HMMM portrait `NO SCR+CPU` 0.0% -> -4.3%). Mean absolute error
+in those columns goes from 7.0% to 8.1% (`NORMAL+CPU`) and 1.2% to 1.9% (`NO SCR+CPU`).
+Note that LMMM `NORMAL+CPU` is now -12.3% for *both* orientations where before landscape
+happened to land on 774 exactly while portrait was already at -12.1% — i.e. openMSX is
+now internally consistent there, like the hardware, but consistently too slow. This is
+the separate arbitration bug, not something the command deltas can fix.
+
+## 9. What would confirm the mechanism
 
 The 2013 measurement set contains **no command-engine capture with the display
 enabled** — every command timing was derived from screen-off traces. That is precisely
@@ -306,16 +346,17 @@ Until (1) exists, the LMMM rule should be labelled for what it is: a constraint 
 to two data points that leaves 28 other cells undisturbed, not a mechanism read off the
 hardware.
 
-## 9. Out of scope
+## 10. Out of scope
 
 * **YMMM portrait** is ~3% fast in openMSX even with the screen off (4032 vs 3914),
   independent of both findings above. openMSX ignores NX for YMMM
   (`clipNX_1_byte<Mode>(DX, 512, ARG)`, `src/video/VDPCmdEngine.cc:1614`), matching the
   datasheet, while real hardware appears to have a small per-rectangle-line cost that
   `slots4.txt`'s `+0` denies. Deserves its own measurement.
-* **CPU contention is a different bug.** With screen + sprites on and the CPU busy,
-  openMSX is 8-16% *slow*: HMMV 1937 vs 2310, LMMV portrait 968 vs 1158, HMMM 1064 vs
-  1160, LMMM portrait 681 vs 775. openMSX gives the CPU absolute priority and makes the
+* **CPU contention is a different bug**, unaffected in kind by this change (see the
+  side-effect note in section 8). With screen + sprites on and the CPU busy, openMSX is
+  8-16% *slow*: HMMV 2123 vs 2310, LMMV portrait 968 vs 1158, HMMM portrait 970 vs 1160,
+  LMMM 679 vs 774. openMSX gives the CPU absolute priority and makes the
   engine take the very next slot (`stealAccessSlot()`,
   `src/video/VDPCmdEngine.hh:63`, `Delta::D1`), whereas `slots3.txt` documents cases
   where real hardware prefers a command access over a CPU request that has already been

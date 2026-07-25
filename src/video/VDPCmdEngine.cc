@@ -801,7 +801,7 @@ void VDPCmdEngine::executePset(EmuTime limit)
 		if (doPset) [[likely]] {
 			tmpDst = vram.cmdWriteWindow.readNP(addr);
 		}
-		nextAccessSlot(Delta::D24); // TODO
+		nextAccessSlot(Delta::D22); // TODO
 		[[fallthrough]];
 	case 1:
 		if (engineTime >= limit) [[unlikely]] { phase = 1; break; }
@@ -859,7 +859,7 @@ void VDPCmdEngine::executeSrch(EmuTime limit)
 			commandDone(calculator.getTime());
 			break;
 		}
-		calculator.next(Delta::D88); // TODO
+		calculator.next(Delta::D86); // TODO
 	}
 	engineTime = calculator.getTime();
 }
@@ -897,7 +897,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		if (doPset) [[likely]] {
 			tmpDst = vram.cmdWriteWindow.readNP(addr);
 		}
-		calculator.next(Delta::D24);
+		calculator.next(Delta::D22);
 		[[fallthrough]];
 	case 1: {
 		if (calculator.limitReached()) [[unlikely]] { phase = 1; break; }
@@ -906,7 +906,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			           tmpDst, CL, LogOp());
 		}
 
-		Delta delta = Delta::D88;
+		Delta delta = Delta::D86;
 		if ((ARG & MAJ) == 0) {
 			// X-Axis is major direction.
 			ADX += TX;
@@ -921,7 +921,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			if (ASX < NY) {
 				ASX += NX;
 				DY += TY;
-				delta = Delta::D120; // 88 + 32
+				delta = Delta::D118; // 86 + 32
 				// Advancing above the top border stops the command, but
 				// advancing below the bottom border wraps to the top.
 				// Same for the block commands, but those handle it via
@@ -944,7 +944,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			if (ASX < NY) {
 				ASX += NX;
 				ADX += TX;
-				delta = Delta::D120; // 88 + 32
+				delta = Delta::D118; // 86 + 32
 			}
 			ASX -= NY;
 			ASX &= 1023; // mask to 10 bits range
@@ -977,7 +977,7 @@ void VDPCmdEngine::startLmmv(EmuTime time)
 	ADX = DX;
 	ANX = tmpNX;
 	nextAccessSlot(time);
-	calcFinishTime(tmpNX, tmpNY, 72 + 24);
+	calcFinishTime(tmpNX, tmpNY, 70 + 22);
 	phase = 0;
 }
 
@@ -1002,7 +1002,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		if (doPset) [[likely]] {
 			tmpDst = vram.cmdWriteWindow.readNP(addr);
 		}
-		calculator.next(Delta::D24);
+		calculator.next(Delta::D22);
 		[[fallthrough]];
 	case 1: {
 		if (calculator.limitReached()) [[unlikely]] { phase = 1; break; }
@@ -1011,9 +1011,9 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			           tmpDst, CL, LogOp());
 		}
 		ADX += TX;
-		Delta delta = Delta::D72;
+		Delta delta = Delta::D70;
 		if (--ANX == 0) {
-			delta = Delta::D136; // 72 + 64;
+			delta = Delta::D134; // 70 + 64;
 			DY += TY; --NY;
 			ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
@@ -1029,7 +1029,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		UNREACHABLE;
 	}
 	engineTime = calculator.getTime();
-	this->calcFinishTime(tmpNX, tmpNY, 72 + 24);
+	this->calcFinishTime(tmpNX, tmpNY, 70 + 22);
 
 	/*
 	if (dstExt) [[unlikely]] {
@@ -1102,7 +1102,7 @@ void VDPCmdEngine::startLmmm(EmuTime time)
 	ADX = DX;
 	ANX = tmpNX;
 	nextAccessSlot(time);
-	calcFinishTime(tmpNX, tmpNY, 64 + 32 + 24);
+	calcFinishTime(tmpNX, tmpNY, 62 + 30 + 22);
 	phase = 0;
 }
 
@@ -1130,14 +1130,18 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		} else {
 		       tmpSrc = 0xFF;
 		}
-		calculator.next(Delta::D32);
+		// This source-read -> destination-read step is the only place
+		// where the 'not immediate' variant is needed. Without it we're
+		// much too fast when both screen and sprites are enabled, see
+		// doc/internal/vdp-vram-timing/issue-2057-analysis.md.
+		calculator.next(Delta::D30_NI);
 		[[fallthrough]];
 	case 1:
 		if (calculator.limitReached()) [[unlikely]] { phase = 1; break; }
 		if (doPset) [[likely]] {
 			tmpDst = vram.cmdWriteWindow.readNP(dstAddr);
 		}
-		calculator.next(Delta::D24);
+		calculator.next(Delta::D22);
 		[[fallthrough]];
 	case 2: {
 		if (calculator.limitReached()) [[unlikely]] { phase = 2; break; }
@@ -1146,9 +1150,9 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			           tmpDst, tmpSrc, LogOp());
 		}
 		ASX += TX; ADX += TX;
-		Delta delta = Delta::D64;
+		Delta delta = Delta::D62;
 		if (--ANX == 0) {
-			delta = Delta::D128; // 64 + 64
+			delta = Delta::D126; // 62 + 64
 			SY += TY; DY += TY; --NY;
 			ASX = SX; ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
@@ -1164,7 +1168,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		UNREACHABLE;
 	}
 	engineTime = calculator.getTime();
-	this->calcFinishTime(tmpNX, tmpNY, 64 + 32 + 24);
+	this->calcFinishTime(tmpNX, tmpNY, 62 + 30 + 22);
 
 	/*if (srcExt || dstExt) [[unlikely]] {
 		bool doPoint = !srcExt || hasExtendedVRAM;
@@ -1362,7 +1366,7 @@ void VDPCmdEngine::startHmmv(EmuTime time)
 	ADX = DX;
 	ANX = tmpNX;
 	nextAccessSlot(time);
-	calcFinishTime(tmpNX, tmpNY, 48);
+	calcFinishTime(tmpNX, tmpNY, 46);
 }
 
 template<typename Mode>
@@ -1386,9 +1390,9 @@ void VDPCmdEngine::executeHmmv(EmuTime limit)
 			              COL, calculator.getTime());
 		}
 		ADX += TX;
-		Delta delta = Delta::D48;
+		Delta delta = Delta::D46;
 		if (--ANX == 0) {
-			delta = Delta::D104; // 48 + 56;
+			delta = Delta::D102; // 46 + 56;
 			DY += TY; --NY;
 			ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
@@ -1399,7 +1403,7 @@ void VDPCmdEngine::executeHmmv(EmuTime limit)
 		calculator.next(delta);
 	}
 	engineTime = calculator.getTime();
-	calcFinishTime(tmpNX, tmpNY, 48);
+	calcFinishTime(tmpNX, tmpNY, 46);
 
 	/*if (dstExt) [[unlikely]] {
 		bool doPset = !dstExt || hasExtendedVRAM;
@@ -1467,7 +1471,7 @@ void VDPCmdEngine::startHmmm(EmuTime time)
 	ADX = DX;
 	ANX = tmpNX;
 	nextAccessSlot(time);
-	calcFinishTime(tmpNX, tmpNY, 24 + 64);
+	calcFinishTime(tmpNX, tmpNY, 22 + 62);
 	phase = 0;
 }
 
@@ -1496,7 +1500,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		} else {
 			tmpSrc = 0xFF;
 		}
-		calculator.next(Delta::D24);
+		calculator.next(Delta::D22);
 		[[fallthrough]];
 	case 1: {
 		if (calculator.limitReached()) [[unlikely]] { phase = 1; break; }
@@ -1505,9 +1509,9 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			              tmpSrc, calculator.getTime());
 		}
 		ASX += TX; ADX += TX;
-		Delta delta = Delta::D64;
+		Delta delta = Delta::D62;
 		if (--ANX == 0) {
-			delta = Delta::D128; // 64 + 64
+			delta = Delta::D126; // 62 + 64
 			SY += TY; DY += TY; --NY;
 			ASX = SX; ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
@@ -1522,7 +1526,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		UNREACHABLE;
 	}
 	engineTime = calculator.getTime();
-	calcFinishTime(tmpNX, tmpNY, 24 + 64);
+	calcFinishTime(tmpNX, tmpNY, 22 + 62);
 
 	/*if (srcExt || dstExt) [[unlikely]] {
 		bool doPoint = !srcExt || hasExtendedVRAM;
@@ -1603,7 +1607,7 @@ void VDPCmdEngine::startYmmm(EmuTime time)
 	ADX = DX;
 	ANX = tmpNX;
 	nextAccessSlot(time);
-	calcFinishTime(tmpNX, tmpNY, 24 + 40);
+	calcFinishTime(tmpNX, tmpNY, 22 + 38);
 	phase = 0;
 }
 
@@ -1633,7 +1637,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			tmpSrc = vram.cmdReadWindow.readNP(
 			       Mode::addressOf(ADX, SY, dstExt));
 		}
-		calculator.next(Delta::D24);
+		calculator.next(Delta::D22);
 		[[fallthrough]];
 	case 1:
 		if (calculator.limitReached()) [[unlikely]] { phase = 1; break; }
@@ -1651,13 +1655,13 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 				break;
 			}
 		}
-		calculator.next(Delta::D40);
+		calculator.next(Delta::D38);
 		goto loop;
 	default:
 		UNREACHABLE;
 	}
 	engineTime = calculator.getTime();
-	calcFinishTime(tmpNX, tmpNY, 24 + 40);
+	calcFinishTime(tmpNX, tmpNY, 22 + 38);
 
 	/*
 	if (dstExt) [[unlikely]] {
