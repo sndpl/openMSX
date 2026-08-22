@@ -14,38 +14,25 @@ namespace openmsx::VDPAccessSlots {
 
 inline constexpr int TICKS = VDP::TICKS_PER_LINE;
 
-/** Minimum distance (in VDP cycles) until the next VRAM access.
-  *
-  * D0/D1 are internal helpers, D16 and D28 are used for CPU accesses (V99x8
-  * resp. TMS99x8). All the others are used by the command engine, where the
-  * value is 'command engine work' + 'request arbitration latency'. The work is
-  * a multiple of 8 (the command engine runs at 1/8 of the VDP clock), the
-  * latency is 14. Note that the original measurements could only determine
-  * these values modulo 8, see
-  * doc/internal/vdp-vram-timing/issue-2057-analysis.md.
-  *
-  * D30_NI ('not immediate') behaves like a 30 cycle delay, except that the
-  * access slot immediately following the current one can only be used when
-  * it's at least 38 (= 30 + one command engine tick) cycles away. Only LMMM
-  * needs this, and only there can the difference be observed. */
 enum class Delta : int {
-	D0     =  0 * TICKS,
-	D1     =  1 * TICKS,
-	D16    =  2 * TICKS,
-	D22    =  3 * TICKS,
-	D28    =  4 * TICKS,
-	D30_NI =  5 * TICKS,
-	D38    =  6 * TICKS,
-	D46    =  7 * TICKS,
-	D62    =  8 * TICKS,
-	D70    =  9 * TICKS,
-	D86    = 10 * TICKS,
-	D102   = 11 * TICKS,
-	D118   = 12 * TICKS,
-	D126   = 13 * TICKS,
-	D134   = 14 * TICKS,
+	D0    =  0 * TICKS,
+	D1    =  1 * TICKS,
+	D16   =  2 * TICKS,
+	D24   =  3 * TICKS,
+	D28   =  4 * TICKS,
+	D32   =  5 * TICKS,
+	D36   =  6 * TICKS,
+	D40   =  7 * TICKS,
+	D48   =  8 * TICKS,
+	D64   =  9 * TICKS,
+	D72   = 10 * TICKS,
+	D88   = 11 * TICKS,
+	D104  = 12 * TICKS,
+	D120  = 13 * TICKS,
+	D128  = 14 * TICKS,
+	D136  = 15 * TICKS,
 };
-static constexpr int NUM_DELTAS = 15;
+static constexpr int NUM_DELTAS = 16;
 
 /** VDP-VRAM access slot calculator, meant to be used in the inner loops of the
   * VDPCmdEngine commands. Code optimized for the case that:

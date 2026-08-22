@@ -6,8 +6,7 @@
 namespace openmsx::VDPAccessSlots {
 
 // These tables must contain at least one value that is bigger or equal
-// to 1368+134 (plus one extra element for the D30_NI delta). So we extend the
-// data with some cyclic duplicates.
+// to 1368+136. So we extend the data with some cyclic duplicates.
 
 // Screen rendering disabled (or vertical border).
 // This is correct (measured on real V9938) for bitmap and character mode.
@@ -156,35 +155,19 @@ struct CycleTable : AccessTable
 {
 	constexpr CycleTable(bool msx1, std::span<const int16_t> slots)
 	{
-		// 'step' is the minimum distance to the next access. When
-		// 'notImmediate' is set, the access slot immediately following
-		// the current one can additionally only be used when it's at
-		// least one command engine tick (8 cycles) beyond 'step'.
-		struct Step { int step; bool notImmediate; };
 		// !!! Keep this in sync with the 'Delta' enum !!!
-		constexpr std::array<Step, NUM_DELTAS> delta = {
-			Step{  0, false}, Step{  1, false}, Step{ 16, false},
-			Step{ 22, false}, Step{ 28, false}, Step{ 30, true },
-			Step{ 38, false}, Step{ 46, false}, Step{ 62, false},
-			Step{ 70, false}, Step{ 86, false}, Step{102, false},
-			Step{118, false}, Step{126, false}, Step{134, false},
+		constexpr std::array<int, NUM_DELTAS> delta = {
+			0, 1, 16, 24, 28, 32, 36, 40, 48, 64, 72, 88, 104, 120, 128, 136
 		};
 
 		size_t out = 0;
-		for (auto [step, notImmediate] : delta) {
+		for (auto step : delta) {
 			int p = 0;
 			while (slots[p] < step) ++p;
-			int q = 0; // first slot after 'i'
 			for (auto i : xrange(TICKS)) {
 				if ((slots[p] - i) < step) ++p;
 				assert((slots[p] - i) >= step);
-				while (slots[q] <= i) ++q;
-				int r = p;
-				if (notImmediate && (r == q) &&
-				    ((slots[r] - i) < (step + 8))) {
-					++r; // skip the immediately next slot
-				}
-				unsigned t = slots[r] - i;
+				unsigned t = slots[p] - i;
 				if (msx1) {
 					if (step <= 40) assert(t < 256);
 				} else {

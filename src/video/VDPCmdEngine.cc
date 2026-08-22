@@ -801,7 +801,7 @@ void VDPCmdEngine::executePset(EmuTime limit)
 		if (doPset) [[likely]] {
 			tmpDst = vram.cmdWriteWindow.readNP(addr);
 		}
-		nextAccessSlot(Delta::D22); // TODO
+		nextAccessSlot(Delta::D24); // TODO
 		[[fallthrough]];
 	case 1:
 		if (engineTime >= limit) [[unlikely]] { phase = 1; break; }
@@ -859,7 +859,7 @@ void VDPCmdEngine::executeSrch(EmuTime limit)
 			commandDone(calculator.getTime());
 			break;
 		}
-		calculator.next(Delta::D86); // TODO
+		calculator.next(Delta::D88); // TODO
 	}
 	engineTime = calculator.getTime();
 }
@@ -897,7 +897,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		if (doPset) [[likely]] {
 			tmpDst = vram.cmdWriteWindow.readNP(addr);
 		}
-		calculator.next(Delta::D22);
+		calculator.next(Delta::D24);
 		[[fallthrough]];
 	case 1: {
 		if (calculator.limitReached()) [[unlikely]] { phase = 1; break; }
@@ -906,7 +906,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			           tmpDst, CL, LogOp());
 		}
 
-		Delta delta = Delta::D86;
+		Delta delta = Delta::D88;
 		if ((ARG & MAJ) == 0) {
 			// X-Axis is major direction.
 			ADX += TX;
@@ -921,7 +921,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			if (ASX < NY) {
 				ASX += NX;
 				DY += TY;
-				delta = Delta::D118; // 86 + 32
+				delta = Delta::D120; // 88 + 32
 				// Advancing above the top border stops the command, but
 				// advancing below the bottom border wraps to the top.
 				// Same for the block commands, but those handle it via
@@ -944,7 +944,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			if (ASX < NY) {
 				ASX += NX;
 				ADX += TX;
-				delta = Delta::D118; // 86 + 32
+				delta = Delta::D120; // 88 + 32
 			}
 			ASX -= NY;
 			ASX &= 1023; // mask to 10 bits range
@@ -977,7 +977,7 @@ void VDPCmdEngine::startLmmv(EmuTime time)
 	ADX = DX;
 	ANX = tmpNX;
 	nextAccessSlot(time);
-	calcFinishTime(tmpNX, tmpNY, 70 + 22);
+	calcFinishTime(tmpNX, tmpNY, 72 + 24);
 	phase = 0;
 }
 
@@ -1002,7 +1002,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		if (doPset) [[likely]] {
 			tmpDst = vram.cmdWriteWindow.readNP(addr);
 		}
-		calculator.next(Delta::D22);
+		calculator.next(Delta::D24);
 		[[fallthrough]];
 	case 1: {
 		if (calculator.limitReached()) [[unlikely]] { phase = 1; break; }
@@ -1011,9 +1011,9 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			           tmpDst, CL, LogOp());
 		}
 		ADX += TX;
-		Delta delta = Delta::D70;
+		Delta delta = Delta::D72;
 		if (--ANX == 0) {
-			delta = Delta::D134; // 70 + 64;
+			delta = Delta::D136; // 72 + 64;
 			DY += TY; --NY;
 			ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
@@ -1029,7 +1029,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		UNREACHABLE;
 	}
 	engineTime = calculator.getTime();
-	this->calcFinishTime(tmpNX, tmpNY, 70 + 22);
+	this->calcFinishTime(tmpNX, tmpNY, 72 + 24);
 
 	/*
 	if (dstExt) [[unlikely]] {
@@ -1102,7 +1102,7 @@ void VDPCmdEngine::startLmmm(EmuTime time)
 	ADX = DX;
 	ANX = tmpNX;
 	nextAccessSlot(time);
-	calcFinishTime(tmpNX, tmpNY, 62 + 30 + 22);
+	calcFinishTime(tmpNX, tmpNY, 64 + 32 + 24);
 	phase = 0;
 }
 
@@ -1122,6 +1122,23 @@ void VDPCmdEngine::executeLmmm(EmuTime limit)
 	unsigned dstAddr = Mode::addressOf(ADX, DY, dstExt);
 	auto calculator = getSlotCalculator(limit);
 
+	// It appears that:
+	//   with sprite rendering enabled the destination-read cannot use the
+	//   access slot exactly 32 cycles after the source-read.
+	// The mechanism for this is unclear yet. We do know:
+	// * This 'hack?' fixes Bengalack's "vdpcmdx" test program:
+	//     https://github.com/openMSX/openMSX/issues/2057
+	// * The same fix cannot be achieved by tuning the timing parameters in
+	//   the current model. We needed 'something' extra, and the current hack
+	//   is conditional timing based on sprites-enabled/disabled. Most likely
+	//   the real hardware has a different (yet unknown) mechanism.
+	// See here for a more detailed discussion:
+	//   https://github.com/sndpl/openMSX/pull/5
+	Delta dstReadDelta =
+		(!vdp.isMSX1VDP() && vdp.getDisplayMode().isBitmapMode() &&
+		 vdp.isDisplayEnabled() && vdp.spritesEnabledRegister())
+		? Delta::D48 : Delta::D32;
+
 	switch (phase) {
 	case 0:
 loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
@@ -1130,18 +1147,14 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		} else {
 		       tmpSrc = 0xFF;
 		}
-		// This source-read -> destination-read step is the only place
-		// where the 'not immediate' variant is needed. Without it we're
-		// much too fast when both screen and sprites are enabled, see
-		// doc/internal/vdp-vram-timing/issue-2057-analysis.md.
-		calculator.next(Delta::D30_NI);
+		calculator.next(dstReadDelta);
 		[[fallthrough]];
 	case 1:
 		if (calculator.limitReached()) [[unlikely]] { phase = 1; break; }
 		if (doPset) [[likely]] {
 			tmpDst = vram.cmdWriteWindow.readNP(dstAddr);
 		}
-		calculator.next(Delta::D22);
+		calculator.next(Delta::D24);
 		[[fallthrough]];
 	case 2: {
 		if (calculator.limitReached()) [[unlikely]] { phase = 2; break; }
@@ -1150,9 +1163,9 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			           tmpDst, tmpSrc, LogOp());
 		}
 		ASX += TX; ADX += TX;
-		Delta delta = Delta::D62;
+		Delta delta = Delta::D64;
 		if (--ANX == 0) {
-			delta = Delta::D126; // 62 + 64
+			delta = Delta::D128; // 64 + 64
 			SY += TY; DY += TY; --NY;
 			ASX = SX; ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
@@ -1168,7 +1181,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		UNREACHABLE;
 	}
 	engineTime = calculator.getTime();
-	this->calcFinishTime(tmpNX, tmpNY, 62 + 30 + 22);
+	this->calcFinishTime(tmpNX, tmpNY, 64 + 32 + 24);
 
 	/*if (srcExt || dstExt) [[unlikely]] {
 		bool doPoint = !srcExt || hasExtendedVRAM;
@@ -1366,7 +1379,7 @@ void VDPCmdEngine::startHmmv(EmuTime time)
 	ADX = DX;
 	ANX = tmpNX;
 	nextAccessSlot(time);
-	calcFinishTime(tmpNX, tmpNY, 46);
+	calcFinishTime(tmpNX, tmpNY, 48);
 }
 
 template<typename Mode>
@@ -1390,9 +1403,9 @@ void VDPCmdEngine::executeHmmv(EmuTime limit)
 			              COL, calculator.getTime());
 		}
 		ADX += TX;
-		Delta delta = Delta::D46;
+		Delta delta = Delta::D48;
 		if (--ANX == 0) {
-			delta = Delta::D102; // 46 + 56;
+			delta = Delta::D104; // 48 + 56;
 			DY += TY; --NY;
 			ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
@@ -1403,7 +1416,7 @@ void VDPCmdEngine::executeHmmv(EmuTime limit)
 		calculator.next(delta);
 	}
 	engineTime = calculator.getTime();
-	calcFinishTime(tmpNX, tmpNY, 46);
+	calcFinishTime(tmpNX, tmpNY, 48);
 
 	/*if (dstExt) [[unlikely]] {
 		bool doPset = !dstExt || hasExtendedVRAM;
@@ -1471,7 +1484,7 @@ void VDPCmdEngine::startHmmm(EmuTime time)
 	ADX = DX;
 	ANX = tmpNX;
 	nextAccessSlot(time);
-	calcFinishTime(tmpNX, tmpNY, 22 + 62);
+	calcFinishTime(tmpNX, tmpNY, 24 + 64);
 	phase = 0;
 }
 
@@ -1500,7 +1513,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		} else {
 			tmpSrc = 0xFF;
 		}
-		calculator.next(Delta::D22);
+		calculator.next(Delta::D24);
 		[[fallthrough]];
 	case 1: {
 		if (calculator.limitReached()) [[unlikely]] { phase = 1; break; }
@@ -1509,9 +1522,9 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			              tmpSrc, calculator.getTime());
 		}
 		ASX += TX; ADX += TX;
-		Delta delta = Delta::D62;
+		Delta delta = Delta::D64;
 		if (--ANX == 0) {
-			delta = Delta::D126; // 62 + 64
+			delta = Delta::D128; // 64 + 64
 			SY += TY; DY += TY; --NY;
 			ASX = SX; ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
@@ -1526,7 +1539,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		UNREACHABLE;
 	}
 	engineTime = calculator.getTime();
-	calcFinishTime(tmpNX, tmpNY, 22 + 62);
+	calcFinishTime(tmpNX, tmpNY, 24 + 64);
 
 	/*if (srcExt || dstExt) [[unlikely]] {
 		bool doPoint = !srcExt || hasExtendedVRAM;
@@ -1607,7 +1620,7 @@ void VDPCmdEngine::startYmmm(EmuTime time)
 	ADX = DX;
 	ANX = tmpNX;
 	nextAccessSlot(time);
-	calcFinishTime(tmpNX, tmpNY, 22 + 38);
+	calcFinishTime(tmpNX, tmpNY, 24 + 36);
 	phase = 0;
 }
 
@@ -1630,6 +1643,12 @@ void VDPCmdEngine::executeYmmm(EmuTime limit)
 	bool doPset  = !dstExt || hasExtendedVRAM;
 	auto calculator = getSlotCalculator(limit);
 
+	// Note: we changed the timing
+	//    from:  40 R 24 W  +0   (see doc/internal/vdp-vram-timing/vdp-timing.html for notation and background info)
+	//    to:    36 R 24 W  +68  (TODO update the above documentation, as it's wrong now)
+	// This is based on:
+	//    https://github.com/openMSX/openMSX/issues/2057   (measurement tools by bengalack)
+	//    https://github.com/sndpl/openMSX/pull/5          (analysis done by Claude (Opus), an AI assistant)
 	switch (phase) {
 	case 0:
 loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
@@ -1637,17 +1656,18 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			tmpSrc = vram.cmdReadWindow.readNP(
 			       Mode::addressOf(ADX, SY, dstExt));
 		}
-		calculator.next(Delta::D22);
+		calculator.next(Delta::D24);
 		[[fallthrough]];
-	case 1:
+	case 1: {
 		if (calculator.limitReached()) [[unlikely]] { phase = 1; break; }
 		if (doPset) [[likely]] {
 			vram.cmdWrite(Mode::addressOf(ADX, DY, dstExt),
 			              tmpSrc, calculator.getTime());
 		}
 		ADX += TX;
+		Delta delta = Delta::D36;
 		if (--ANX == 0) {
-			// note: going to the next line does not take extra time
+			delta = Delta::D104; // 36 + 68
 			SY += TY; DY += TY; --NY;
 			ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
@@ -1655,13 +1675,14 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 				break;
 			}
 		}
-		calculator.next(Delta::D38);
+		calculator.next(delta);
 		goto loop;
+	}
 	default:
 		UNREACHABLE;
 	}
 	engineTime = calculator.getTime();
-	calcFinishTime(tmpNX, tmpNY, 22 + 38);
+	calcFinishTime(tmpNX, tmpNY, 24 + 36);
 
 	/*
 	if (dstExt) [[unlikely]] {

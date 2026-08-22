@@ -152,6 +152,7 @@ void ImGuiMachine::showMenu(MSXMotherBoard* motherBoard)
 		const auto& hotKey = reactor.getHotKey();
 
 		ImGui::MenuItem("Select MSX machine...", nullptr, &showSelectMachine);
+		showRecentMachinesMenu();
 
 		auto showSetupDepthLevelSelector = [&](const std::string& displayText, const bool includeNone, SetupDepth currentDepth) {
 			static constexpr array_with_enum_index<SetupDepth, zstring_view> helpText = {
@@ -404,6 +405,38 @@ void ImGuiMachine::showMenu(MSXMotherBoard* motherBoard)
 			previewSetup.motherBoard.reset();
 		});
 	}
+}
+
+void ImGuiMachine::showRecentMachinesMenu()
+{
+	// grayed-out as long as no machine has been selected via the GUI, and also
+	// when none of the remembered machines exists (anymore)
+	bool anyMachine = std::ranges::any_of(recentMachines, [&](const auto& item) {
+		return findMachineInfo(item) != nullptr;
+	});
+	im::Menu("Recent machines", anyMachine, [&]{
+		// don't switch machine (and thus modify 'recentMachines') while iterating over it
+		std::string selectedMachine;
+		for (const auto& [i, item] : enumerate(recentMachines)) {
+			auto* info = findMachineInfo(item);
+			if (!info) continue;
+			bool ok = getTestResult(*info).empty();
+			im::StyleColor(!ok, ImGuiCol_Text, getColor(imColor::ERROR), [&]{
+				if (ImGui::MenuItem(tmpStrCat(info->displayName, "##", i).c_str()) && ok) {
+					selectedMachine = info->configName;
+				}
+			});
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_NoSharedDelay | ImGuiHoveredFlags_Stationary)) {
+				im::ItemTooltip([&]{
+					printConfigInfo(*info);
+				});
+			}
+		}
+		if (!selectedMachine.empty()) {
+			manager.executeDelayed(makeTclList("machine", selectedMachine));
+			addRecentItem(recentMachines, selectedMachine);
+		}
+	});
 }
 
 void ImGuiMachine::signalQuit()
@@ -1102,16 +1135,26 @@ const std::string& ImGuiMachine::getTestResult(MachineInfo& info)
 		info.testResult.emplace(); // empty string (for now)
 
 		auto& reactor = manager.getReactor();
-		manager.executeDelayed([&reactor, &info]() mutable {
+		std::string configName = info.configName;
+		manager.executeDelayed([&reactor, configName, this]() mutable {
 			// don't create extra mb while drawing
 			try {
+				auto* currentInfo = findMachineInfo(configName);
+				if (!currentInfo) return;
+
 				MSXMotherBoard mb(reactor);
 				mb.getMSXCliComm().setSuppressMessages(true);
-				mb.loadMachine(info.configName);
-				assert(info.testResult->empty());
-				amendConfigInfo(mb, info);
-			} catch (MSXException& e) {
-				info.testResult = e.getMessage(); // error
+				mb.loadMachine(configName);
+				//assert(currentInfo->testResult->empty());
+				amendConfigInfo(mb, *currentInfo);
+			} catch (const MSXException& e) {
+				if (auto* currentInfo = findMachineInfo(configName)) {
+					currentInfo->testResult = e.getMessage(); // error
+				}
+			} catch (const std::exception& e) {
+				if (auto* currentInfo = findMachineInfo(configName)) {
+					currentInfo->testResult = strCat("std::exception: ", e.what()); // error
+				}
 			}
 		});
 	}
@@ -1158,12 +1201,6 @@ ImGuiMachine::MachineInfo* ImGuiMachine::findMachineInfo(std::string_view config
 {
 	auto& allMachines = getAllMachines();
 	auto it = std::ranges::find(allMachines, config, &MachineInfo::configName);
-	if (it == allMachines.end()) {
-		// perhaps something changed, let's refresh the cache and try again
-		machineInfo.clear();
-		allMachines = getAllMachines();
-		it = std::ranges::find(allMachines, config, &MachineInfo::configName);
-	}
 	return (it != allMachines.end()) ? std::to_address(it) : nullptr;
 }
 
