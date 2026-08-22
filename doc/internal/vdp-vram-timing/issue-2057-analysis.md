@@ -1,5 +1,14 @@
 # V9938 command timing: why LMMM is too fast and YMMM (no sprites) too slow
 
+> **Note (2026).** The two fixes argued for here have since landed in openMSX, but in a
+> different form than proposed below: a sprites-on specific delay for LMMM's
+> destination read rather than the `work + 14` / "not immediate" rule of section 5, and
+> a plain 36/104 for YMMM. A second set of logic-analyzer measurements has since become
+> available and pins every command timing directly, superseding the parts of this
+> document that reason from the aggregate `vdpcmdx` frame counts. See
+> `2026-measurement-analysis.md`.
+
+
 Analysis of [openMSX issue #2057](https://github.com/openMSX/openMSX/issues/2057).
 
 This document argues from two sources:
