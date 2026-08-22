@@ -21,7 +21,7 @@ enum class Delta : int {
 	D24   =  3 * TICKS,
 	D28   =  4 * TICKS,
 	D32   =  5 * TICKS,
-	D36   =  6 * TICKS,
+	D38   =  6 * TICKS,
 	D40   =  7 * TICKS,
 	D48   =  8 * TICKS,
 	D64   =  9 * TICKS,
@@ -30,7 +30,7 @@ enum class Delta : int {
 	D104  = 12 * TICKS,
 	D120  = 13 * TICKS,
 	D128  = 14 * TICKS,
-	D136  = 15 * TICKS,
+	D134  = 15 * TICKS,
 };
 static constexpr int NUM_DELTAS = 16;
 

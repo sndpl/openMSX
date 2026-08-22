@@ -6,7 +6,7 @@
 namespace openmsx::VDPAccessSlots {
 
 // These tables must contain at least one value that is bigger or equal
-// to 1368+136. So we extend the data with some cyclic duplicates.
+// to 1368+134. So we extend the data with some cyclic duplicates.
 
 // Screen rendering disabled (or vertical border).
 // This is correct (measured on real V9938) for bitmap and character mode.
@@ -157,7 +157,7 @@ struct CycleTable : AccessTable
 	{
 		// !!! Keep this in sync with the 'Delta' enum !!!
 		constexpr std::array<int, NUM_DELTAS> delta = {
-			0, 1, 16, 24, 28, 32, 36, 40, 48, 64, 72, 88, 104, 120, 128, 136
+			0, 1, 16, 24, 28, 32, 38, 40, 48, 64, 72, 88, 104, 120, 128, 134
 		};
 
 		size_t out = 0;
