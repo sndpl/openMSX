@@ -831,7 +831,7 @@ void VDP::scheduleCpuVramAccess(bool isRead, uint8_t write, EmuTime time)
 			// So this test could not decide between 8 or 9 TMS cycles.
 			// To be on the safe side we picked 8.
 			//
-			// Update: 8 TMS cycles (= 32 V99x8 cycles) causes corruption in
+			// Update: 8 cycles (Delta::D32) causes corruption in
 			// 'Chase HQ', see
 			//    http://www.msx.org/forum/msx-talk/openmsx/openmsx-about-release-testing-help-wanted
 			// lowering it to 7 cycles seems fine. TODO needs more
