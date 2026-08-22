@@ -52,6 +52,15 @@ namespace openmsx {
 
 using namespace VDPAccessSlots;
 
+/** Is the VDP using the 'sprites enabled' access slot table? A few command
+  * timings deviate in that mode, see the comments in executeHmmm() and
+  * executeLmmm(). */
+[[nodiscard]] static bool usesSpritesOnSlots(const VDP& vdp)
+{
+	return !vdp.isMSX1VDP() && vdp.getDisplayMode().isBitmapMode() &&
+	       vdp.isDisplayEnabled() && vdp.spritesEnabledRegister();
+}
+
 template<typename Mode>
 static constexpr unsigned clipNX_1_pixel(unsigned DX, unsigned NX, uint8_t ARG)
 {
@@ -1013,7 +1022,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		ADX += TX;
 		Delta delta = Delta::D72;
 		if (--ANX == 0) {
-			delta = Delta::D136; // 72 + 64;
+			delta = Delta::D134; // 72 + 62
 			DY += TY; --NY;
 			ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
@@ -1132,12 +1141,18 @@ void VDPCmdEngine::executeLmmm(EmuTime limit)
 	//   the current model. We needed 'something' extra, and the current hack
 	//   is conditional timing based on sprites-enabled/disabled. Most likely
 	//   the real hardware has a different (yet unknown) mechanism.
+	// * The 2026 logic-analyzer measurements show the same deviation for the
+	//   step to the next line of the block, for both LMMM and HMMM: with
+	//   sprites on the slot exactly 128 cycles after the last write is not
+	//   used either. Both are cases where the delay is an exact multiple of
+	//   the 32-cycle sprites-on slot pitch; no other command timing is.
+	//     https://github.com/m9710797/vdp-timing-measurements
+	//     doc/internal/vdp-vram-timing/2026-measurement-analysis.md
 	// See here for a more detailed discussion:
 	//   https://github.com/sndpl/openMSX/pull/5
-	Delta dstReadDelta =
-		(!vdp.isMSX1VDP() && vdp.getDisplayMode().isBitmapMode() &&
-		 vdp.isDisplayEnabled() && vdp.spritesEnabledRegister())
-		? Delta::D48 : Delta::D32;
+	bool spritesOn = usesSpritesOnSlots(vdp);
+	Delta dstReadDelta = spritesOn ? Delta::D48 : Delta::D32;
+	Delta nextLineDelta = spritesOn ? Delta::D134 : Delta::D128;
 
 	switch (phase) {
 	case 0:
@@ -1165,7 +1180,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		ASX += TX; ADX += TX;
 		Delta delta = Delta::D64;
 		if (--ANX == 0) {
-			delta = Delta::D128; // 64 + 64
+			delta = nextLineDelta; // 64 + 64 (+6 with sprites on)
 			SY += TY; DY += TY; --NY;
 			ASX = SX; ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
@@ -1505,6 +1520,13 @@ void VDPCmdEngine::executeHmmm(EmuTime limit)
 	bool doPset  = !dstExt || hasExtendedVRAM;
 	auto calculator = getSlotCalculator(limit);
 
+	// Same deviation as for LMMM: with sprite rendering enabled the read at
+	// the start of a new line in the block cannot use the access slot
+	// exactly 128 cycles after the last write of the previous line. See the
+	// comments in executeLmmm() and the analysis in
+	// doc/internal/vdp-vram-timing/2026-measurement-analysis.md.
+	Delta nextLineDelta = usesSpritesOnSlots(vdp) ? Delta::D134 : Delta::D128;
+
 	switch (phase) {
 	case 0:
 loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
@@ -1524,7 +1546,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		ASX += TX; ADX += TX;
 		Delta delta = Delta::D64;
 		if (--ANX == 0) {
-			delta = Delta::D128; // 64 + 64
+			delta = nextLineDelta; // 64 + 64 (+6 with sprites on)
 			SY += TY; DY += TY; --NY;
 			ASX = SX; ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
@@ -1665,9 +1687,9 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			              tmpSrc, calculator.getTime());
 		}
 		ADX += TX;
-		Delta delta = Delta::D36;
+		Delta delta = Delta::D38;
 		if (--ANX == 0) {
-			delta = Delta::D104; // 36 + 68
+			delta = Delta::D104; // 38 + 66
 			SY += TY; DY += TY; --NY;
 			ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
