@@ -6,7 +6,7 @@
 namespace openmsx::VDPAccessSlots {
 
 // These tables must contain at least one value that is bigger or equal
-// to 1368+134. So we extend the data with some cyclic duplicates.
+// to 1368+132. So we extend the data with some cyclic duplicates.
 
 // Screen rendering disabled (or vertical border).
 // This is correct (measured on real V9938) for bitmap and character mode.
@@ -151,22 +151,64 @@ protected:
 	std::array<uint8_t, NUM_DELTAS * TICKS> values = {};
 };
 
+/** Extra timing properties of a slot table, both of them measured on a Philips
+  * NMS 8280; see doc/internal/vdp-vram-timing/2026-measurement-analysis.md.
+  *
+  * 'stretch1' / 'stretch2': two of the VDP's memory cycles are 10 cycles long
+  * where all the others in that part of the line are 8 -- the access slots in
+  * the horizontal blanking region are 10 apart there, and the /CAS of those two
+  * slots follows their /RAS by 2 cycles instead of 1. The command engine's
+  * delay counter does not see those 4 cycles, so a delay that spans them takes
+  * 4 more real cycles to be satisfied. The two values are the slots at which
+  * each stretch has completed, i.e. an interval (from, to] costs 2 cycles less
+  * per stretch it contains. 0 means 'not applicable to this table'.
+  *
+  * 'extra': added to every command engine step. Sprite rendering costs one
+  * extra cycle, as if the arbitration decision for a slot were taken one cycle
+  * earlier while the sprite fetch logic is active. Without it the source ->
+  * destination read of LMMM and the line transition of LMMM and HMMM each need
+  * their own sprites-on value, which is what openMSX used to do.
+  *
+  * Both only apply to the V99x8 bitmap tables; the character, text and MSX1
+  * tables have never been measured this way and are left alone. */
+struct Timing {
+	int stretch1 = 0;
+	int stretch2 = 0;
+	int extra = 0;
+};
+
 struct CycleTable : AccessTable
 {
-	constexpr CycleTable(bool msx1, std::span<const int16_t> slots)
+	constexpr CycleTable(bool msx1, std::span<const int16_t> slots,
+	                     Timing timing = {})
 	{
 		// !!! Keep this in sync with the 'Delta' enum !!!
 		constexpr std::array<int, NUM_DELTAS> delta = {
-			0, 1, 16, 24, 28, 32, 38, 40, 48, 64, 72, 88, 104, 120, 128, 134
+			0, 1, 16, 28, 24, 32, 38, 48, 60, 72, 84, 88, 104, 120, 128, 132
+		};
+
+		// Distance from cycle 'i' to slot 's' as the command engine counts it.
+		auto dist = [&](int i, int s) {
+			int d = s - i;
+			if ((timing.stretch1 > i) && (timing.stretch1 <= s)) d -= 2;
+			if ((timing.stretch2 > i) && (timing.stretch2 <= s)) d -= 2;
+			return d;
 		};
 
 		size_t out = 0;
-		for (auto step : delta) {
+		for (auto idx : xrange(NUM_DELTAS)) {
+			bool cmd = idx >= FIRST_CMD_DELTA;
+			int step = delta[idx] + (cmd ? timing.extra : 0);
 			int p = 0;
-			while (slots[p] < step) ++p;
 			for (auto i : xrange(TICKS)) {
-				if ((slots[p] - i) < step) ++p;
-				assert((slots[p] - i) >= step);
+				// 'dist' is not monotonic in 'i' at the stretched slots, so
+				// the search can occasionally have to step back one slot.
+				auto ok = [&](int q) {
+					return cmd ? (dist(i, slots[q]) >= step)
+					           : ((slots[q] - i) >= step);
+				};
+				while (!ok(p)) ++p;
+				while ((p > 0) && ok(p - 1)) --p;
 				unsigned t = slots[p] - i;
 				if (msx1) {
 					if (step <= 40) assert(t < 256);
@@ -183,11 +225,17 @@ struct ZeroTable : AccessTable
 {
 };
 
-static constexpr CycleTable tabSpritesOn     (false, slotsSpritesOn);
-static constexpr CycleTable tabSpritesOff    (false, slotsSpritesOff);
+// The stretched memory cycles sit two cycles earlier when the display is
+// enabled, following the slot grid of those modes.
+static constexpr Timing timScreenOff  {1334, 1344, 0};
+static constexpr Timing timSpritesOff {1332, 1342, 0};
+static constexpr Timing timSpritesOn  {1332, 1342, 1};
+
+static constexpr CycleTable tabSpritesOn     (false, slotsSpritesOn, timSpritesOn);
+static constexpr CycleTable tabSpritesOff    (false, slotsSpritesOff, timSpritesOff);
 static constexpr CycleTable tabChar          (false, slotsChar);
 static constexpr CycleTable tabText          (false, slotsText);
-static constexpr CycleTable tabScreenOff     (false, slotsScreenOff);
+static constexpr CycleTable tabScreenOff     (false, slotsScreenOff, timScreenOff);
 static constexpr CycleTable tabMsx1Gfx12     (true,  slotsMsx1Gfx12);
 static constexpr CycleTable tabMsx1Gfx3      (true,  slotsMsx1Gfx3);
 static constexpr CycleTable tabMsx1Text      (true,  slotsMsx1Text);

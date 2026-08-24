@@ -14,25 +14,34 @@ namespace openmsx::VDPAccessSlots {
 
 inline constexpr int TICKS = VDP::TICKS_PER_LINE;
 
+/** Minimum distance until the next VRAM access.
+  *
+  * D0 and D1 are internal helpers, D16 and D28 are the CPU access delays
+  * (V99x8 resp. TMS99x8). All the others are command engine steps, and for
+  * those the distance is counted in the VDP's memory cycles rather than in VDP
+  * cycles; see the comment above CycleTable in VDPAccessSlots.cc. */
 enum class Delta : int {
 	D0    =  0 * TICKS,
 	D1    =  1 * TICKS,
 	D16   =  2 * TICKS,
-	D24   =  3 * TICKS,
-	D28   =  4 * TICKS,
+	D28   =  3 * TICKS,
+	D24   =  4 * TICKS,
 	D32   =  5 * TICKS,
 	D38   =  6 * TICKS,
-	D40   =  7 * TICKS,
-	D48   =  8 * TICKS,
-	D64   =  9 * TICKS,
-	D72   = 10 * TICKS,
+	D48   =  7 * TICKS,
+	D60   =  8 * TICKS,
+	D72   =  9 * TICKS,
+	D84   = 10 * TICKS,
 	D88   = 11 * TICKS,
 	D104  = 12 * TICKS,
 	D120  = 13 * TICKS,
 	D128  = 14 * TICKS,
-	D134  = 15 * TICKS,
+	D132  = 15 * TICKS,
 };
 static constexpr int NUM_DELTAS = 16;
+/** The first command engine step in the 'Delta' enum; everything from here on
+  * is subject to the memory-cycle counting. */
+static constexpr int FIRST_CMD_DELTA = 4;
 
 /** VDP-VRAM access slot calculator, meant to be used in the inner loops of the
   * VDPCmdEngine commands. Code optimized for the case that:
