@@ -50,11 +50,13 @@ VRAM_LINE = 128             # bytes per VRAM line in screen 5
 # Access slot tables, exactly as in src/video/VDPAccessSlots.cc.
 #
 # Measured from /RAS in the raw captures: all 154 / 88 / 31 slots are confirmed
-# to within 0.06 cycles.  Note this is *not* what part2/README.md of the
-# measurement repository proposes: its correction of two slots per table (CAS
-# 1325/1335 -> 1326/1336 for dispOff and 1323/1333 -> 1324/1334 for sprOff)
-# moves them one cycle too far.  The .txt files record those accesses at the
-# corrected positions, so they are moved back on input, see RELABEL.
+# to within 0.06 cycles.
+#
+# The .txt analyses in the measurement repository are /CAS based.  /CAS normally
+# follows /RAS by one cycle, but for exactly two slots per table -- 1324 and
+# 1334 here, 1322 and 1332 for sprites-off -- it follows by two, because those
+# two memory cycles are stretched (see V() below).  So the CAS -> RAS conversion
+# is not a uniform -1 for those two slots; RELABEL handles them.
 # --------------------------------------------------------------------------
 SLOTS_DISP_OFF = [
        0,    8,   16,   24,   32,   40,   48,   56,   64,   72,
@@ -107,7 +109,8 @@ PUBLISHED_TABLES = {
 def table(mode):
     return (PUBLISHED_TABLES if PUBLISHED[0] else TABLES)[mode]
 
-# The published .txt files place these accesses one cycle late (RAS numbering)
+# CAS -> RAS is -2 rather than -1 for these (after the uniform -1, subtract
+# one more)
 RELABEL = {'dispOff': {1325: 1324, 1335: 1334},
            'sprOff': {1323: 1322, 1333: 1332},
            'sprOn': {}}

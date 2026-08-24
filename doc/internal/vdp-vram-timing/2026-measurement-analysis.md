@@ -24,7 +24,8 @@ vcd-slot-grid.py <measurement-repo>/part2                  # where the slots are
 ```
 
 Cycle numbers throughout are openMSX's, which are based on /RAS. The `.txt` analyses in
-the measurement repository are based on /CAS and are one higher.
+the measurement repository are based on /CAS, which normally follows /RAS by one cycle —
+but not for two slots per table, see section 2.
 
 ## 1. The model under test
 
@@ -52,9 +53,9 @@ means no single value can reproduce the data — the interesting case.
 
 ## 2. The access slot tables are confirmed, measured from /RAS
 
-`part2/README.md` proposes moving two slots per table one cycle later (in openMSX's
-numbering, `slotsScreenOff` 1324 → 1325 and 1334 → 1335, `slotsSpritesOff` 1322 → 1323
-and 1332 → 1333). That correction is **wrong**, and openMSX's existing tables are right.
+`part2/README.md` proposes moving two slots per table one cycle later. openMSX's tables
+need no change, and the apparent disagreement is a difference of convention, not an
+error on either side — see the end of this section.
 
 The published `.txt` analyses derive access times by interpolating between the eight
 DRAM refresh accesses of a line, which is only eight anchors per line. `/RAS` is a much
@@ -88,21 +89,29 @@ not off by one: openMSX's display-off table is *exactly* the measured 166-slot g
 the eight refresh slots (284 + 128k) and the four dummy-read slots (1236, 1244, 1252,
 1260), and shifting the anchor by one cycle makes both of those holes stop lining up.
 
-Finally, of the 104 211 accesses in the published `5.slots` files, only 1 108 (1.06 %)
-sit at a cycle that is not a measured slot, and they are exactly the two slots of the
-proposed correction:
+Of the 104 211 accesses in the published `5.slots` files, only 1 108 (1.06 %) sit at a
+cycle that is not a /RAS slot, and they are exactly the two slots of the proposed
+correction (display off CAS 1326 and 1336, sprites off CAS 1324 and 1334; sprites on has
+none). So the retiming is otherwise correct to the cycle, including across the
+1181 → 285 stretch where there are no refresh accesses to interpolate between.
 
-| mode | published position | measured slot | count |
+**Why the two conventions disagree there.** /CAS normally follows /RAS by one cycle. For
+exactly those slots it follows by two:
+
+| mode | single-/CAS accesses | with a 1-cycle /RAS → /CAS delay | with 2 cycles |
 |---|---|---|---|
-| display off | CAS 1336 | CAS 1335 | 423 |
-| display off | CAS 1326 | CAS 1325 | 236 |
-| sprites off | CAS 1334 | CAS 1333 | 295 |
-| sprites off | CAS 1324 | CAS 1323 | 154 |
-| sprites on | — | — | 0 |
+| display off | 4 862 | 4 839 | 23, all at RAS 1324 and 1334 |
+| sprites off | 4 382 | 4 336 | 46, all at RAS 1322 and 1332 |
+| sprites on | 8 036 | 8 036 | none |
 
-So the retiming is otherwise correct to the cycle, including across the 1181 → 285
-stretch where there are no refresh accesses to interpolate between. `2026-measurement-
-check.py` moves those accesses back to the measured slot before fitting anything.
+(Burst accesses — one /RAS with several /CAS — are excluded; those are the display
+fetches.) So openMSX's /RAS-based 1324 / 1334 and the measurement repository's /CAS-based
+1326 / 1336 describe the same two slots, and the only wrong assumption was that the
+conversion between them is a uniform one cycle. `2026-measurement-check.py` subtracts two
+rather than one for those slots.
+
+That the extra /CAS delay lands on exactly the two slots that start the 10-cycle gaps is
+not a coincidence: they are the stretched memory cycles of section 4.1.
 
 ## 3. Results
 
@@ -215,17 +224,48 @@ leave intervals within that mode unchanged.
 The two go together: the deltas above *without* 4.1 give 1970 (2.6 %). The remaining 32
 are the single sprites-off outlier of section 6.
 
-Both rules are free at run time. They only change how `VDPAccessSlots.cc` builds its
+Both rules are free at run time: they only change how `VDPAccessSlots.cc` builds its
 per-cycle lookup tables — the stretch as a correction inside the table generator, the
-sprites-on cycle as a per-table offset — and they would remove the mode conditionals from
-the command implementations entirely. **Not implemented yet**: this is a change to the
-shape of the model rather than a parameter fix, so it is waiting on agreement in
-[sndpl/openMSX#5](https://github.com/sndpl/openMSX/pull/5).
+sprites-on cycle as a per-table offset — and they remove the mode conditionals from the
+command implementations entirely. This is implemented; see the `Timing` struct in
+`VDPAccessSlots.cc`. The character, text and MSX1 tables are left alone, having never
+been measured this way.
 
-## 5. What is currently in openMSX
+`vdpcmdx` improves as well, which it did not have to, since none of this was fitted to
+it. Active area, non-CPU columns, before → after (real hardware in brackets):
 
-Two of openMSX's values were outside the admissible band of the plain model and are
-corrected on this branch:
+| cell | before | after | real |
+|---|---|---|---|
+| HMMM portrait `NO SPR`  | 2636 | **2658** | 2659 |
+| HMMM landscape `NO SPR` | 2668 | **2672** | 2673 |
+| LMMM landscape `NO SPR` | 1970 | **1971** | 1971 |
+| LMMM portrait `NO SPR`  | 1954 | **1955** | 1955 |
+| YMMM landscape `NO SPR` | 3796 | **3797** | 3797 |
+| YMMM landscape `NO SCR` | 3994 | 3995 | 3996 |
+
+Every non-CPU cell is now within 3 pixels of the reference. Nothing else in the non-CPU
+columns changed.
+
+### 4.4 One caveat on 4.2
+
+The stretch is measured in display-off and sprites-off mode; in sprites-on mode the
+signature is not visible, because the sprite fetches occupy that part of the line and
+there is no command or CPU slot there to show the two-cycle /CAS delay. The
+implementation applies the stretch to all three bitmap tables, which is what makes the
+sprites-on cost come out as one cycle.
+
+The alternative — applying it only where it is directly measured — fits the data exactly
+as well (32 mispredictions either way) but then the sprites-on cost is five cycles, and
+LMMM's source→destination read and the line transition come out at 28 and 126 instead of
+the round 32 and 128. Since the stretch is a property of the line timing rather than of
+the sprite fetching, and since the tidier constants fall out of it, the first reading is
+implemented. The data cannot distinguish them.
+
+## 5. History: the parameter-only fix
+
+Superseded by section 4, kept because the `vdpcmdx` comparison below is the only
+end-to-end check of the whole chain. Two of openMSX's values were outside the admissible
+band of the plain model and were corrected first:
 
 | step | was | now | plain-model band |
 |---|---|---|---|
@@ -233,10 +273,9 @@ corrected on this branch:
 | LMMV newline | 136 (= 72 + 64) | 134 (= 72 + 62) | [133,134] |
 
 and the sprites-on deviation known from LMMM's destination read applies to the
-line-transition step of both HMMM and LMMM as well, so that step uses 134 instead of 128
-when sprite rendering is active. Under section 4 those three become consequences of one
-rule rather than separate facts, but they are the right values for the model openMSX has
-today.
+line-transition step of both HMMM and LMMM as well, so that step used 134 instead of 128
+when sprite rendering was active. Under section 4 all three become consequences of the
+two table properties rather than separate facts.
 
 `vdpcmdx` barely notices, as expected. Measured on a Philips NMS 8255, the ACTIVE block,
 non-CPU columns, before → after:
@@ -350,3 +389,16 @@ calibration target; a CPU-loop-period sweep would be.
   cannot be turned into a number, but if that is recoverable they would be the first
   direct measurement of it. Otherwise the same small-command rig would expose it as an
   offset in the completion-time distribution.
+
+## 10. Where the stretched memory cycles might come from
+
+Speculation, with no measurements behind it. The V9938 data book documents bits S0 and
+S1 of R#9 as selecting one of three "cycle modes", and its tables give 1368 cycles per
+horizontal line for S1,S0 = 0,0 but 1365 for the other two settings (section 5 "Cycle
+mode" and section 7-1 "Horizontal display parameters"). A VDP that has to be able to
+drop three cycles from a line has some reason to keep a subsystem from counting a few
+cycles in the blanking region, which is what section 4.1 measures — 4 cycles rather than
+3, and openMSX does not implement the 1365-cycle modes at all, so this is a hint at most.
+
+Data book: <https://www.mirrorservice.org/sites/www.bitsavers.org/pdf/yamaha/Yamaha_V9938_MSX-Video_Technical_Data_Book_Aug85.pdf>,
+transcription: <https://map.grauw.nl/resources/video/v9938/v9938.xhtml>.
