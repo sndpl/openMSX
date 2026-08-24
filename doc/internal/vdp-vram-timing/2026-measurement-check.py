@@ -2,24 +2,35 @@
 """Fit the openMSX command-engine timing model to the 2026 logic-analyzer set.
 
 Usage:
-    2026-measurement-check.py <path-to-vdp-timing-measurements>/part2/5.slots
+    2026-measurement-check.py <measurement-repo>/part2/5.slots [--cpu] [--plain]
 
 Reads the annotated access traces from
 <https://github.com/m9710797/vdp-timing-measurements> and, for every
-command-engine step (e.g. HMMM's write -> next read), reports which values of
-the openMSX 'Delta' would reproduce *every* observed access.
+command-engine step (e.g. HMMM's write -> next read), reports which delays
+would reproduce *every* observed access.
 
-The model under test is exactly the one openMSX implements:
+The model is openMSX's:
 
     next access = the first VRAM access slot at or after (previous access +
                   delta), where delta = 'command engine work' + 'request
                   arbitration latency'
 
-For a single observed pair (previous access at p, next access at n) that model
-is satisfied by every delta in [prevSlot(n) - p + 1, n - p]; intersecting those
-intervals over all observations of one step gives its admissible band.
+with two refinements that the raw captures force (see
+2026-measurement-analysis.md; vcd-slot-grid.py does the slot measurement):
 
-See 2026-measurement-analysis.md for the conclusions.
+  * the delay is counted in the VDP's memory cycles rather than VDP cycles.
+    Two memory cycles per line are stretched by two cycles each in the
+    horizontal blanking region -- the slot grid there runs
+    ... 1316 1324 1334 1344 ... where every other gap is 8 -- and the engine's
+    counter does not see the stretch.  '--plain' turns this off.
+  * with sprite rendering active every delay is one cycle longer.
+
+For one observed pair (previous access at p, next access at n) the model is
+satisfied by every delta in [prevSlot(n) - p + 1, n - p] measured in that time
+base; intersecting over all observations of a step gives its band.
+
+Cycle numbers here are openMSX's, which are based on /RAS.  The .txt files of
+the measurement repository are based on /CAS and are one higher.
 """
 from __future__ import annotations
 
@@ -36,52 +47,75 @@ CPU_CODES = ('R.r', 'W.w')  # CPU read / write
 VRAM_LINE = 128             # bytes per VRAM line in screen 5
 
 # --------------------------------------------------------------------------
-# Access slot tables.
+# Access slot tables, exactly as in src/video/VDPAccessSlots.cc.
 #
-# Same tables as src/video/VDPAccessSlots.cc, but in the measurement's cycle
-# numbering, which is openMSX + 1.  Two slots per table differ from the values
-# derived from the 2013 measurements (see part2/README.md of the measurement
-# repository): dispOff 1325 -> 1326 and 1335 -> 1336, sprOff 1323 -> 1324 and
-# 1333 -> 1334.  With those corrections the tables reproduce the measured slot
-# histograms exactly (154 / 88 / 31 slots).
+# Measured from /RAS in the raw captures: all 154 / 88 / 31 slots are confirmed
+# to within 0.06 cycles.  Note this is *not* what part2/README.md of the
+# measurement repository proposes: its correction of two slots per table (CAS
+# 1325/1335 -> 1326/1336 for dispOff and 1323/1333 -> 1324/1334 for sprOff)
+# moves them one cycle too far.  The .txt files record those accesses at the
+# corrected positions, so they are moved back on input, see RELABEL.
 # --------------------------------------------------------------------------
 SLOTS_DISP_OFF = [
-       1,    9,   17,   25,   33,   41,   49,   57,   65,   73,
-      81,   89,   97,  105,  113,  121,  165,  173,  181,  189,
-     197,  205,  213,  221,  229,  237,  245,  253,  261,  269,
-     277,  293,  301,  309,  317,  325,  333,  341,  349,  357,
-     365,  373,  381,  389,  397,  405,  421,  429,  437,  445,
-     453,  461,  469,  477,  485,  493,  501,  509,  517,  525,
-     533,  549,  557,  565,  573,  581,  589,  597,  605,  613,
-     621,  629,  637,  645,  653,  661,  677,  685,  693,  701,
-     709,  717,  725,  733,  741,  749,  757,  765,  773,  781,
-     789,  805,  813,  821,  829,  837,  845,  853,  861,  869,
-     877,  885,  893,  901,  909,  917,  933,  941,  949,  957,
-     965,  973,  981,  989,  997, 1005, 1013, 1021, 1029, 1037,
-    1045, 1061, 1069, 1077, 1085, 1093, 1101, 1109, 1117, 1125,
-    1133, 1141, 1149, 1157, 1165, 1173, 1189, 1197, 1205, 1213,
-    1221, 1229, 1269, 1277, 1285, 1293, 1301, 1309, 1317, 1326,
-    1336, 1345, 1353, 1361,
+       0,    8,   16,   24,   32,   40,   48,   56,   64,   72,
+      80,   88,   96,  104,  112,  120,  164,  172,  180,  188,
+     196,  204,  212,  220,  228,  236,  244,  252,  260,  268,
+     276,  292,  300,  308,  316,  324,  332,  340,  348,  356,
+     364,  372,  380,  388,  396,  404,  420,  428,  436,  444,
+     452,  460,  468,  476,  484,  492,  500,  508,  516,  524,
+     532,  548,  556,  564,  572,  580,  588,  596,  604,  612,
+     620,  628,  636,  644,  652,  660,  676,  684,  692,  700,
+     708,  716,  724,  732,  740,  748,  756,  764,  772,  780,
+     788,  804,  812,  820,  828,  836,  844,  852,  860,  868,
+     876,  884,  892,  900,  908,  916,  932,  940,  948,  956,
+     964,  972,  980,  988,  996, 1004, 1012, 1020, 1028, 1036,
+    1044, 1060, 1068, 1076, 1084, 1092, 1100, 1108, 1116, 1124,
+    1132, 1140, 1148, 1156, 1164, 1172, 1188, 1196, 1204, 1212,
+    1220, 1228, 1268, 1276, 1284, 1292, 1300, 1308, 1316, 1324,
+    1334, 1344, 1352, 1360,
 ]
 SLOTS_SPR_OFF = [
-       7,   15,   23,   31,   39,   47,   55,   63,   71,   79,
-      87,   95,  103,  111,  119,  163,  171,  183,  189,  215,
-     221,  247,  253,  279,  311,  317,  343,  349,  375,  381,
-     407,  439,  445,  471,  477,  503,  509,  535,  567,  573,
-     599,  605,  631,  637,  663,  695,  701,  727,  733,  759,
-     765,  791,  823,  829,  855,  861,  887,  893,  919,  951,
-     957,  983,  989, 1015, 1021, 1047, 1079, 1085, 1111, 1117,
-    1143, 1149, 1175, 1207, 1213, 1267, 1275, 1283, 1291, 1299,
-    1307, 1315, 1324, 1334, 1343, 1351, 1359, 1367,
+       6,   14,   22,   30,   38,   46,   54,   62,   70,   78,
+      86,   94,  102,  110,  118,  162,  170,  182,  188,  214,
+     220,  246,  252,  278,  310,  316,  342,  348,  374,  380,
+     406,  438,  444,  470,  476,  502,  508,  534,  566,  572,
+     598,  604,  630,  636,  662,  694,  700,  726,  732,  758,
+     764,  790,  822,  828,  854,  860,  886,  892,  918,  950,
+     956,  982,  988, 1014, 1020, 1046, 1078, 1084, 1110, 1116,
+    1142, 1148, 1174, 1206, 1212, 1266, 1274, 1282, 1290, 1298,
+    1306, 1314, 1322, 1332, 1342, 1350, 1358, 1366,
 ]
 SLOTS_SPR_ON = [
-      29,   93,  163,  171,  189,  221,  253,  317,  349,  381,
-     445,  477,  509,  573,  605,  637,  701,  733,  765,  829,
-     861,  893,  957,  989, 1021, 1085, 1117, 1149, 1213, 1265,
-    1331,
+      28,   92,  162,  170,  188,  220,  252,  316,  348,  380,
+     444,  476,  508,  572,  604,  636,  700,  732,  764,  828,
+     860,  892,  956,  988, 1020, 1084, 1116, 1148, 1212, 1264,
+    1330,
 ]
 TABLES = {'dispOff': SLOTS_DISP_OFF, 'sprOff': SLOTS_SPR_OFF,
           'sprOn': SLOTS_SPR_ON}
+
+# part2/README.md's proposed correction, for comparison (--published-slots)
+PUBLISHED_TABLES = {
+    'dispOff': [1325 if s == 1324 else 1335 if s == 1334 else s
+                for s in SLOTS_DISP_OFF],
+    'sprOff': [1323 if s == 1322 else 1333 if s == 1332 else s
+               for s in SLOTS_SPR_OFF],
+    'sprOn': SLOTS_SPR_ON,
+}
+
+
+def table(mode):
+    return (PUBLISHED_TABLES if PUBLISHED[0] else TABLES)[mode]
+
+# The published .txt files place these accesses one cycle late (RAS numbering)
+RELABEL = {'dispOff': {1325: 1324, 1335: 1334},
+           'sprOff': {1323: 1322, 1333: 1332},
+           'sprOn': {}}
+
+# The two stretched memory cycles: the slot between the two stretches, and the
+# first slot after them.
+STRETCH = {'dispOff': (1334, 1344), 'sprOff': (1332, 1342),
+           'sprOn': (1332, 1342)}
 
 # VRAM accesses per pixel/byte step, and the role of each
 ROLES = {
@@ -93,18 +127,7 @@ ROLES = {
     'lmmm': ('Rs', 'Rd', 'W'),
 }
 
-# 'noCpu' traces that do contain CPU accesses, i.e. the filename does not match
-# what was measured.  They are the only source of the mid-line inconsistencies,
-# so they are excluded from the no-CPU fit.
-MISLABELLED = {
-    'scr5-dispOff-hmmv-noCpu-nx2-6d.txt',
-    'scr5-dispOff-lmmv-noCpu-nx2-3d.txt',
-    'scr5-dispOff-ymmm-noCpu-nx12-1d.txt',
-    'scr5-sprOff-lmmm-noCpu-nx2-3d.txt',
-    'scr5-sprOff-lmmv-noCpu-nx8-5d.txt',
-}
-
-# The values openMSX uses, for comparison
+# The values openMSX uses today, for comparison
 OPENMSX = {
     ('hmmv', 'W->W'): 48,  ('hmmv', 'newline'): 104,
     ('lmmv', 'R->W'): 24,  ('lmmv', 'W->R'): 72,  ('lmmv', 'newline'): 134,
@@ -114,19 +137,55 @@ OPENMSX = {
     ('lmmm', 'newline'): 128,
     ('line', 'R->W'): 24,  ('line', 'W->R'): 88,  ('line', 'newline'): 120,
 }
-OPENMSX_SPR_ON = {   # sprites-on specific values
-    ('lmmm', 'Rs->Rd'): 48,
-    ('hmmm', 'newline'): 134,
-    ('lmmm', 'newline'): 134,
+OPENMSX_SPR_ON = {('lmmm', 'Rs->Rd'): 48, ('hmmm', 'newline'): 134,
+                  ('lmmm', 'newline'): 134}
+
+# Best fit under the refined model: one value per step, +1 with sprites on
+FITTED = {
+    ('hmmv', 'W->W'): 48,  ('hmmv', 'newline'): 104,
+    ('lmmv', 'R->W'): 24,  ('lmmv', 'W->R'): 72,  ('lmmv', 'newline'): 132,
+    ('ymmm', 'R->W'): 24,  ('ymmm', 'W->R'): 38,  ('ymmm', 'newline'): 104,
+    ('hmmm', 'R->W'): 24,  ('hmmm', 'W->R'): 60,  ('hmmm', 'newline'): 128,
+    ('lmmm', 'Rd->W'): 24, ('lmmm', 'Rs->Rd'): 32, ('lmmm', 'W->Rs'): 60,
+    ('lmmm', 'newline'): 128,
+    ('line', 'R->W'): 24,  ('line', 'W->R'): 84,  ('line', 'newline'): 120,
 }
+
+PLAIN = [False]     # --plain: VDP cycles, and no sprites-on adjustment
+PUBLISHED = [False]  # --published-slots: use part2/README.md's slot correction
+
+
+def V(mode, t):
+    """The engine's own time: absolute cycle minus the stretch seen so far.
+
+    Deliberately not periodic -- it loses 4 cycles per line -- which is fine
+    because the engine's counter restarts at every access, so only intervals
+    matter.
+    """
+    if PLAIN[0]:
+        return t
+    line, c = divmod(t, TICKS)
+    a, b = STRETCH[mode]
+    return t - (4 * line + (0 if c < a else 2 if c < b else 4))
+
+
+def meta(path):
+    m = re.match(r'scr5-(\w+)-(\w+)-(\w+?)(?:-nx\d+)?-\d+[a-z]?\.txt$',
+                 os.path.basename(path))
+    if not m or m[1] not in TABLES:
+        return None
+    return {'mode': m[1], 'cmd': m[2], 'cpu': m[3],
+            'name': os.path.basename(path)}
 
 
 def parse(path):
-    """Return [(absolute_time, code, address)], ordered in time.
+    """[(absolute cycle, code, address)] in time order, RAS numbering.
 
-    The files are laid out with one row per cycle-within-a-line and one column
-    per display line, so absolute time is 1368 * column + row.
+    The files have one row per cycle-within-a-line and one column per display
+    line, so the absolute CAS cycle is 1368 * column + row, and RAS is one
+    lower.
     """
+    rel = {} if PUBLISHED[0] else RELABEL[meta(path)['mode']]
     items = []
     with open(path) as f:
         for ln in f:
@@ -138,37 +197,28 @@ def parse(path):
             while rest:
                 cell = rest[2:13]
                 if cell.strip():
-                    items.append((TICKS * col + t, cell[0:3], int(cell[6:11], 16)))
+                    line, c = divmod(TICKS * col + t - 1, TICKS)
+                    items.append((line * TICKS + rel.get(c, c),
+                                  cell[0:3], int(cell[6:11], 16)))
                 rest = rest[13:]
                 col += 1
     items.sort()
     return items
 
 
-def meta(path):
-    m = re.match(r'scr5-(\w+)-(\w+)-(\w+?)(?:-nx\d+)?-\d+[a-z]?\.txt$',
-                 os.path.basename(path))
-    if not m:
-        return None
-    return {'mode': m[1], 'cmd': m[2], 'cpu': m[3],
-            'name': os.path.basename(path)}
-
-
 def transitions(path):
-    """Yield (step_name, prev_time, next_time) for one trace."""
+    """Yield (step, prev cycle, next cycle) for one trace."""
     info = meta(path)
     if info is None or info['cmd'] not in ROLES:
         return
     roles = ROLES[info['cmd']]
     acc = [a for a in parse(path) if a[1] not in CPU_CODES]
-    # The VDP's dummy read shows up as an unclassified read of 0x1ffff. A few
-    # traces happen to have a command source pointer walking through the top of
-    # VRAM, so only treat 0x1ffff as a dummy when no other command access in
-    # the trace is anywhere near it.
+    # The dummy read shows up as an unclassified read of 0x1ffff, but in a few
+    # YMMM captures the command's own source pointer walks through the top of
+    # VRAM, so only drop it when nothing else in the trace is near.
     real = any(a[2] != DUMMY_ADDR and abs(a[2] - DUMMY_ADDR) < 0x400
                for a in acc)
-    eng = [a for a in acc
-           if real or (a[1], a[2]) != (DUMMY_CODE, DUMMY_ADDR)]
+    eng = [a for a in acc if real or (a[1], a[2]) != (DUMMY_CODE, DUMMY_ADDR)]
     writes = [i for i, a in enumerate(eng) if a[1][0] == 'W']
     groups = []
     for a, b in zip(writes, writes[1:]):
@@ -188,117 +238,139 @@ def transitions(path):
             # else: the command restarted, no useful constraint
 
 
-def next_slot(table, t, delta):
-    """First access slot at or after t + delta."""
-    line, off = divmod(t + delta, TICKS)
-    for s in table:
-        if s >= off:
-            return line * TICKS + s
-    return (line + 1) * TICKS + table[0]
+def next_slot(mode, p, delta, taken=frozenset()):
+    """First slot at least 'delta' engine cycles after p and not taken by the
+    CPU (which has priority)."""
+    tab = table(mode)
+    line = p // TICKS
+    for k in range(4):
+        for s in tab:
+            t = (line + k) * TICKS + s
+            if t > p and V(mode, t) - V(mode, p) >= delta and t not in taken:
+                return t
+    raise AssertionError('no slot found')
 
 
-def prev_slot(table, t):
-    """Largest access slot strictly before t."""
-    line, off = divmod(t, TICKS)
-    best = [s for s in table if s < off]
-    return line * TICKS + best[-1] if best else (line - 1) * TICKS + table[-1]
+def prev_slot(mode, n):
+    tab = table(mode)
+    line, off = divmod(n, TICKS)
+    earlier = [s for s in tab if s < off]
+    return (line * TICKS + earlier[-1] if earlier
+            else (line - 1) * TICKS + tab[-1])
+
+
+def delta_for(table, spron, key, mode):
+    if mode == 'sprOn':
+        if key in spron:
+            return spron[key]
+        return table[key] + (0 if PLAIN[0] else 1)
+    return table[key]
+
+
+def bands(files):
+    out = collections.defaultdict(lambda: (1, 400))
+    n = collections.Counter()
+    for f in files:
+        mode = meta(f)['mode']
+        cmd = meta(f)['cmd']
+        for step, p, nx in transitions(f):
+            key = (cmd, step, mode)
+            lo = V(mode, prev_slot(mode, nx)) - V(mode, p) + 1
+            hi = V(mode, nx) - V(mode, p)
+            a, b = out[key]
+            out[key] = (max(a, lo), min(b, hi))
+            n[key] += 1
+    return out, n
+
+
+def count_misses(files, table, spron, cpu_traces=False, plain=None):
+    saved = PLAIN[0]
+    if plain is not None:
+        PLAIN[0] = plain
+    tot = bad = contended = 0
+    per = collections.Counter()
+    for f in files:
+        info = meta(f)
+        taken = {a[0] for a in parse(f) if a[1] in CPU_CODES} \
+            if cpu_traces else frozenset()
+        for step, p, nx in transitions(f):
+            key = (info['cmd'], step)
+            d = delta_for(table, spron, key, info['mode'])
+            first = next_slot(info['mode'], p, d)
+            got = next_slot(info['mode'], p, d, taken)
+            tot += 1
+            contended += (got != first)
+            if got != nx:
+                bad += 1
+                per[key + (info['mode'],)] += 1
+    PLAIN[0] = saved
+    return tot, bad, contended, per
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('slots_dir', help='part2/5.slots of the measurement repo')
+    ap.add_argument('slots_dir')
     ap.add_argument('--cpu', action='store_true',
                     help='use the rdCpu/wrCpu traces and test the arbitration')
+    ap.add_argument('--plain', action='store_true',
+                    help='no memory-cycle stretch and no sprites-on +1')
+    ap.add_argument('--published-slots', action='store_true',
+                    help="use part2/README.md's one-cycle slot correction")
     args = ap.parse_args()
+    PLAIN[0] = args.plain
+    PUBLISHED[0] = args.published_slots
 
-    pattern = '*Cpu-*.txt' if args.cpu else '*-noCpu*.txt'
-    files = sorted(glob.glob(os.path.join(args.slots_dir, 'scr5-' + pattern)))
+    files = [f for f in sorted(glob.glob(os.path.join(args.slots_dir,
+                                                      'scr5-*.txt')))
+             if meta(f) and '-wrong-' not in f]
+    files = [f for f in files
+             if (meta(f)['cpu'] != 'noCpu') == bool(args.cpu)]
     if not files:
         sys.exit(f'no traces found in {args.slots_dir}')
 
     if args.cpu:
-        check_arbitration(files)
+        for label, tbl, spron, pl in (
+                ('openMSX today', OPENMSX, OPENMSX_SPR_ON, True),
+                ('fitted model', FITTED, {}, False)):
+            tot, bad, cont, _ = count_misses(files, tbl, spron, True, pl)
+            print(f'{len(files)} traces with CPU activity, {tot} engine '
+                  f'transitions, the CPU took the slot the engine wanted in '
+                  f'{100.0 * cont / tot:.1f}% of them')
+            print(f'    {label:16}: {bad} mispredicted '
+                  f'({100.0 * bad / tot:.3f}%)')
         return
 
-    obs = collections.defaultdict(list)
-    for f in files:
-        info = meta(f)
-        if info['name'] in MISLABELLED:
-            continue
-        for step, p, n in transitions(f):
-            obs[(info['cmd'], step, info['mode'])].append((p, n))
-
-    print(f'{len(files)} traces, {sum(len(v) for v in obs.values())} '
-          f'engine-to-engine transitions\n')
-    print(f'{"cmd":5} {"step":9} {"mode":8} {"n":>6}  {"admissible delta":18} '
-          f'{"openMSX":>7} {"misses":>7}')
+    b, n = bands(files)
+    print(f'{len(files)} traces, {sum(n.values())} engine-to-engine transitions'
+          + ('   [--plain: VDP cycles]' if args.plain else ''))
+    print()
+    print(f'{"cmd":5} {"step":9} {"dispOff":>12} {"sprOff":>12} {"sprOn":>12}'
+          f'   all modes')
     print('-' * 72)
-    combined = collections.defaultdict(dict)
-    total_miss = [0]
-    for key in sorted(obs, key=lambda k: (k[0], k[1], k[2])):
-        cmd, step, mode = key
-        table = TABLES[mode]
-        lo, hi = 1, 400
-        for p, n in obs[key]:
-            lo = max(lo, prev_slot(table, n) - p + 1)
-            hi = min(hi, n - p)
-        combined[(cmd, step)][mode] = (lo, hi)
-        d = OPENMSX_SPR_ON.get((cmd, step)) if mode == 'sprOn' else None
-        d = d or OPENMSX[(cmd, step)]
-        miss = sum(1 for p, n in obs[key] if next_slot(table, p, d) != n)
-        band = f'[{lo},{hi}]' + ('  inconsistent' if lo > hi else '')
-        print(f'{cmd:5} {step:9} {mode:8} {len(obs[key]):6}  {band:18} '
-              f'{d:7} {miss:7}')
-        total_miss[0] += miss
-    n = sum(len(v) for v in obs.values())
-    print(f'\nopenMSX mispredicts {total_miss[0]} of {n} transitions '
-          f'({100.0 * total_miss[0] / n:.2f}%)')
-    print('\nvalues that work in all three modes:')
-    for key in sorted(combined):
-        v = combined[key]
-        lo = max(x[0] for x in v.values())
-        hi = min(x[1] for x in v.values())
-        nlo = max(v[m][0] for m in ('dispOff', 'sprOff'))
-        nhi = min(v[m][1] for m in ('dispOff', 'sprOff'))
-        slo, shi = v['sprOn']
-        if lo <= hi:
-            note = ''
-        elif nlo <= nhi and slo <= shi:
-            note = f'   sprites-on needs [{slo},{shi}], the others [{nlo},{nhi}]'
-        else:
-            note = '   no single value; see the per-mode rows above'
-        print(f'  {key[0]:5} {key[1]:9} [{lo},{hi}]{note}')
-
-
-def check_arbitration(files):
-    """Does the engine take the first slot at/after its minimum that the CPU
-    did not take?  That is what openMSX's stealAccessSlot() implements."""
-    total = contended = wrong = late = 0
-    for f in files:
-        info = meta(f)
-        if info is None or info['cmd'] not in ROLES:
-            continue
-        table = TABLES[info['mode']]
-        cpu = {a[0] for a in parse(f) if a[1] in CPU_CODES}
-        for step, p, n in transitions(f):
-            key = (info['cmd'], step)
-            d = (OPENMSX_SPR_ON.get(key) if info['mode'] == 'sprOn' else None) \
-                or OPENMSX[key]
-            first = next_slot(table, p, d)
-            t = first
-            while t in cpu:
-                t = next_slot(table, t, 1)
-            total += 1
-            contended += (t != first)
-            if t != n:
-                wrong += 1
-                late += (n > t)
-    print(f'{len(files)} traces with CPU activity, {total} engine transitions')
-    print(f'  the CPU took the slot the engine wanted: {contended} '
-          f'({100.0 * contended / total:.1f}%)')
-    print(f'  mispredicted by openMSX\'s arbitration:  {wrong} '
-          f'({100.0 * wrong / total:.2f}%)   [{late} of them: engine later '
-          f'than modelled]')
+    for cmd, step in sorted({(k[0], k[1]) for k in b}):
+        cells, lo, hi = [], 1, 400
+        for mode in ('dispOff', 'sprOff', 'sprOn'):
+            k = (cmd, step, mode)
+            if k not in b:
+                cells.append('-')
+                continue
+            a, z = b[k]
+            cells.append(f'[{a},{z}]' + ('!' if a > z else ''))
+            if mode == 'sprOn' and not args.plain:
+                a, z = a - 1, z - 1     # sprites-on costs one cycle more
+            lo, hi = max(lo, a), min(hi, z)
+        allb = f'[{lo},{hi}]' + ('   no single value' if lo > hi else '')
+        print(f'{cmd:5} {step:9} ' + ' '.join(f'{c:>12}' for c in cells)
+              + f'   {allb}')
+    print()
+    for label, tbl, spron, pl in (
+            ('openMSX today', OPENMSX, OPENMSX_SPR_ON, True),
+            ('fitted model', FITTED, {}, args.plain)):
+        tot, bad, _, per = count_misses(files, tbl, spron, plain=pl)
+        print(f'{label:16}: {bad} of {tot} mispredicted '
+              f'({100.0 * bad / tot:.3f}%)')
+        for k, v in sorted(per.items(), key=lambda kv: -kv[1])[:4]:
+            print(f'    {k[0]:5} {k[1]:9} {k[2]:8} {v}')
 
 
 if __name__ == '__main__':
