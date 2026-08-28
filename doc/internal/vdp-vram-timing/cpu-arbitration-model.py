@@ -57,7 +57,11 @@ import sys
 TICKS = 1368
 LEAD = 26                # memory cycles, from the rising edge of /CSx
 PAIR_EXTRA_LEAD = 2      # extra lead of a slot 6 cycles after another slot
-FREE_BEFORE = [0]        # the register frees this many cycles before the access
+# The register frees this many cycles before the access, not at the access
+# itself: fitted on the 2013 set, where 9 is the unique optimum (7-8 and 10-11
+# are each worse by a handful), and confirmed on the 2026 set, where it predicts
+# 314 lost requests in sprites-on mode against about 326 observed.
+FREE_BEFORE = [9]
 PERIOD_2013 = 3060       # 39 * 72 + 252
 IN_PERIOD = 72
 BURST = 40

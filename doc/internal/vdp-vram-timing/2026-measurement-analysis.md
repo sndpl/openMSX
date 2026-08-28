@@ -428,11 +428,12 @@ The model:
    CPU's access.
 
 Fit: 1141 CPU accesses in the 2013 set, 5 not predicted and 5 predicted but absent; 12
-843 in the 2026 set, 1.8 % not predicted, of which the median needs the recorded request
-time moved by 0.13 cycles -- i.e. most of the residue is the asynchronous clock, not the
-model. The predicted number of dummy reads is 336 against 335 observed, and the predicted
-number of lost requests in sprites-on mode, where the slots are up to 70 cycles apart,
-is 314 against about 326 observed.
+843 in the 2026 set, 1.8 % not predicted. Of those 235, 127 would be explained by moving
+the recorded request time by less than a cycle and 99 by less than the analyzer's
+0.27-cycle sampling step, so more than half of the residue is the asynchronous clock
+rather than the model. 313 of the 335 dummy reads are predicted, and the predicted number
+of lost requests in sprites-on mode, where the slots are up to 70 cycles apart, is 314
+against about 326 observed.
 
 The lost requests are the reason the 2026 captures show 8 % more /CSx pulses than VRAM
 accesses in sprites-on mode and almost none in display-off mode.
