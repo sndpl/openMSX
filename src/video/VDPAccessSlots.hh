@@ -27,8 +27,8 @@ enum class Delta : int {
 	D28   =  3 * TICKS,
 	D24   =  4 * TICKS,
 	D32   =  5 * TICKS,
-	D38   =  6 * TICKS,
-	D48   =  7 * TICKS,
+	D36   =  6 * TICKS,
+	D46   =  7 * TICKS,
 	D60   =  8 * TICKS,
 	D72   =  9 * TICKS,
 	D84   = 10 * TICKS,
@@ -36,12 +36,15 @@ enum class Delta : int {
 	D104  = 12 * TICKS,
 	D120  = 13 * TICKS,
 	D128  = 14 * TICKS,
-	D132  = 15 * TICKS,
+	D130  = 15 * TICKS,
 };
 static constexpr int NUM_DELTAS = 16;
 /** The first command engine step in the 'Delta' enum; everything from here on
   * is subject to the memory-cycle counting. */
 static constexpr int FIRST_CMD_DELTA = 4;
+/** The CPU access delays in the 'Delta' enum, D16 and D28. */
+static constexpr int FIRST_CPU_DELTA = 2;
+static constexpr int LAST_CPU_DELTA = 3;
 
 /** VDP-VRAM access slot calculator, meant to be used in the inner loops of the
   * VDPCmdEngine commands. Code optimized for the case that:

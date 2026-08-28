@@ -1013,7 +1013,7 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 		ADX += TX;
 		Delta delta = Delta::D72;
 		if (--ANX == 0) {
-			delta = Delta::D132; // 72 + 60
+			delta = Delta::D130; // 72 + 58
 			DY += TY; --NY;
 			ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
@@ -1399,9 +1399,9 @@ void VDPCmdEngine::executeHmmv(EmuTime limit)
 			              COL, calculator.getTime());
 		}
 		ADX += TX;
-		Delta delta = Delta::D48;
+		Delta delta = Delta::D46;
 		if (--ANX == 0) {
-			delta = Delta::D104; // 48 + 56;
+			delta = Delta::D104; // 46 + 58
 			DY += TY; --NY;
 			ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {
@@ -1661,9 +1661,9 @@ loop:		if (calculator.limitReached()) [[unlikely]] { phase = 0; break; }
 			              tmpSrc, calculator.getTime());
 		}
 		ADX += TX;
-		Delta delta = Delta::D38;
+		Delta delta = Delta::D36;
 		if (--ANX == 0) {
-			delta = Delta::D104; // 38 + 66
+			delta = Delta::D104; // 36 + 68
 			SY += TY; DY += TY; --NY;
 			ADX = DX; ANX = tmpNX;
 			if (--tmpNY == 0) {

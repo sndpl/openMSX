@@ -184,7 +184,7 @@ struct CycleTable : AccessTable
 	{
 		// !!! Keep this in sync with the 'Delta' enum !!!
 		constexpr std::array<int, NUM_DELTAS> delta = {
-			0, 1, 16, 28, 24, 32, 38, 48, 60, 72, 84, 88, 104, 120, 128, 132
+			0, 1, 16, 28, 24, 32, 36, 46, 60, 72, 84, 88, 104, 120, 128, 130
 		};
 
 		// Distance from cycle 'i' to slot 's' as the command engine counts it.
@@ -195,15 +195,37 @@ struct CycleTable : AccessTable
 			return d;
 		};
 
+		// Which slots follow another slot after only 6 cycles? Only the
+		// sprites-off table has such slots, 25 of its 88.
+		std::array<bool, TICKS> isSlot = {};
+		for (auto s : slots) {
+			if (s < TICKS) isSlot[s] = true;
+		}
+		std::array<bool, TICKS> tight = {};
+		std::array<int16_t, 32> tightSlots = {};
+		int numTight = 0;
+		for (auto s : slots) {
+			if (s >= TICKS) continue;
+			if (isSlot[(s >= 6) ? (s - 6) : (s + TICKS - 6)]) {
+				tight[s] = true;
+				tightSlots[numTight++] = s;
+			}
+		}
+
 		size_t out = 0;
 		for (auto idx : xrange(NUM_DELTAS)) {
 			bool cmd = idx >= FIRST_CMD_DELTA;
+			bool cpu = (idx >= FIRST_CPU_DELTA) && (idx <= LAST_CPU_DELTA);
 			int step = delta[idx] + (cmd ? timing.extra : 0);
 			int p = 0;
 			for (auto i : xrange(TICKS)) {
 				// 'dist' is not monotonic in 'i' at the stretched slots, so
 				// the search can occasionally have to step back one slot.
 				auto ok = [&](int q) {
+					// The CPU never gets one of the tight slots: the VDP
+					// spends it on a dummy read and does the CPU's access in
+					// the next slot.
+					if (cpu && tight[slots[q] % TICKS]) return false;
 					return cmd ? (dist(i, slots[q]) >= step)
 					           : ((slots[q] - i) >= step);
 				};
@@ -216,6 +238,18 @@ struct CycleTable : AccessTable
 					assert(t < 256);
 				}
 				values[out++] = narrow_cast<uint8_t>(t);
+			}
+		}
+		// A memory cycle that starts only 6 cycles after the previous one
+		// finishes one cycle late as far as the command engine is concerned, so
+		// a step that starts there needs one extra cycle -- which is the same
+		// as starting one cycle later. All the tight slots are in the display
+		// area, far away from the stretched memory cycles, so the shift is
+		// exact.
+		for (auto idx : xrange(FIRST_CMD_DELTA, NUM_DELTAS)) {
+			for (auto k : xrange(numTight)) {
+				size_t b = (size_t(idx) * TICKS) + tightSlots[k];
+				values[b] = narrow_cast<uint8_t>(values[b + 1] + 1);
 			}
 		}
 	}

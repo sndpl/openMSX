@@ -19,8 +19,9 @@ Two scripts in this directory produce every number here:
 ```
 vcd-slot-grid.py <measurement-repo>/part2                  # where the slots are
 2026-measurement-check.py <repo>/part2/5.slots             # command timing
-2026-measurement-check.py <repo>/part2/5.slots --cpu       # CPU arbitration
+2026-measurement-check.py <repo>/part2/5.slots --cpu       # under CPU contention
 2026-measurement-check.py <repo>/part2/5.slots --plain     # without section 4's rules
+cpu-arbitration-model.py <measurement-repo>                # the CPU's own slots
 ```
 
 Cycle numbers throughout are openMSX's, which are based on /RAS. The `.txt` analyses in
@@ -148,7 +149,7 @@ and that fixing the first collapses the second.
 ## 4. What the model needs
 
 Two refinements to the plain model account for everything but 32 of the 76 766
-transitions.
+transitions; the third, in section 6, accounts for those.
 
 ### 4.1 The delay is counted in memory cycles, not VDP cycles
 
@@ -201,28 +202,40 @@ leave intervals within that mode unchanged.
 
 ### 4.3 The resulting values
 
-| command | step | admissible | openMSX today |
-|---|---|---|---|
-| HMMM, LMMM (dst), LMMV, YMMM, LINE | R → W | 21..24 | 24 |
-| HMMM, LMMM | W → R(src) | **59..60** | 64 |
-| LMMM | R(src) → R(dst) | 27..**32** | 32, and 48 with sprites on |
-| HMMV | W → W | 45..48 | 48 |
-| LMMV | W → R | 71..72 | 72 |
-| YMMM | W → R | 33..38 | 38 |
-| LINE | W → R | **81..84** | 88 |
-| HMMV | newline | 103..104 | 104 |
-| YMMM | newline | 103..104 | 104 |
-| LINE | newline | 119..120 | 120 |
-| HMMM, LMMM | newline | 125..**128** | 128, and 134 with sprites on |
-| LMMV | newline | 129..**132** | 134 |
+| command | step | admissible | chosen | openMSX before |
+|---|---|---|---|---|
+| HMMM, LMMM (dst), LMMV, YMMM, LINE | R → W | 21..24 | 24 | 24 |
+| HMMM, LMMM | W → R(src) | 59..60 | **60** | 64 |
+| LMMM | R(src) → R(dst) | 27..32 | **32** | 32, and 48 with sprites on |
+| HMMV | W → W | 45..48 | **46** | 48 |
+| LMMV | W → R | 71..72 | **72** | 72 |
+| YMMM | W → R | 33..38 | **36** | 38 |
+| LINE | W → R | 81..84 | **84** | 88 |
+| HMMV | newline | 103..104 | **104** | 104 |
+| YMMM | newline | 103..104 | **104** | 104 |
+| LINE | newline | 119..120 | **120** | 120 |
+| HMMM, LMMM | newline | 125..128 | **128** | 128, and 134 with sprites on |
+| LMMV | newline | 129..132 | **130** | 134 |
+
+The values in the `chosen` column are Wouter's, picked so that each command has one
+per-line overhead that all of its steps share: HMMV 46 + 58 and 104 = 46 + 58, LMMV
+24 + 72 + 58, YMMM 24 + 36 + 68, HMMM 24 + 60 + 68, LMMM 32 + 24 + 60 + 68, LINE
+24 + 84 + 36. Those constraints have almost no freedom left in them: a shared *even*
+overhead for the two fills forces 58 and with it HMMV 46 and LMMV 72, a shared even
+overhead for the three copies forces 68 and with it YMMM 36 and HMMM/LMMM 60. Only
+R → W ∈ {22, 24} and LINE ∈ {84 + 36, 82 + 38} are left, and both are settled by
+preferring the multiple of 4. The fills and the copies cannot share one overhead --
+[57,59] and [68,69] are disjoint -- and no assignment makes every value a multiple of 8.
 
 | model | mispredicted of 76 766 |
 |---|---|
 | openMSX today | 456 (0.594 %) |
-| 4.1 + 4.2, with the deltas above | **32 (0.042 %)** |
+| 4.1 + 4.2, with the deltas above | 32 (0.042 %) |
+| and section 6 | **0** |
 
-The two go together: the deltas above *without* 4.1 give 1970 (2.6 %). The remaining 32
-are the single sprites-off outlier of section 6.
+The rules go together: the deltas above *without* 4.1 give 1970 (2.6 %). The same model
+gets the 2013 set right as well -- 3965 transitions, 0 wrong -- once the truncation of
+`screen5screenoffHMMVnocpu.txt` is taken into account.
 
 Both rules are free at run time: they only change how `VDPAccessSlots.cc` builds its
 per-cycle lookup tables — the stretch as a correction inside the table generator, the
@@ -306,43 +319,70 @@ few-percent level).
 So the justification for these changes is the bus captures, not the aggregate frame
 counts.
 
-## 6. The one remaining outlier
-
-In the sprites-off table, HMMM's and LMMM's line-transition step uses the slot exactly
-128 cycles later in every observed case except one: starting from cycle 188 the slot at
-+128 is skipped and +154 is used. That is 32 of the 835 observations of that step, all
-from the same starting cycle.
+## 6. Slots that follow another slot after only 6 cycles
 
 The sprites-off display area has its slots in pairs 6 cycles apart, at offsets
-{0, 6, 32, 38, 64, 70, 96} of every 128 cycles. Cycle 188 is the second slot of a pair,
-and so is its +128 target; every observation that *does* use the +128 slot starts from
-one of the offsets 0, 32, 64 or 96. So the one candidate rule the data offers is that the
-engine cannot use a slot that follows only 6 cycles after another slot when its request
-became pending in that window. But there is exactly one starting position in the data
-that tests this, so it is a single coincidence away from being noise. openMSX does not
-model it.
+{0, 6, 32, 38, 64, 70, 96} of every 128 cycles. Reading the raw captures, the pair is
+the *freed sprite fetch* and the memory cycle that is spare in both modes: with sprites
+on, the cycle at 182 + 32k fetches sprite data and the one at 188 + 32k is free; with
+sprites off, both are free. 25 of the 88 sprites-off slots are the second of such a
+pair. Neither the display-off nor the sprites-on table has any.
 
-## 7. Five traces were mislabelled
+Two independent effects follow from that, and both are needed:
+
+**The command engine pays one cycle.** A step whose *previous* access was in one of
+those 25 slots takes one cycle longer, as if that memory cycle -- squeezed against its
+predecessor -- had finished one cycle late. 1778 transitions in the 2026 set start from
+such a slot: 32 of them (HMMM's and LMMM's line transition from cycle 188) need the extra
+cycle, and 1281 of them rule out a third cycle. So the band is exactly [1, 2]; openMSX
+adds 1. Without it those 32 are the only mispredictions left in the whole set.
+
+**The CPU never gets one.** Of 4550 CPU accesses in the sprites-off captures of both
+measurement sets, **zero** are in one of those 25 slots, while all 63 other slots are
+used. That is not a coincidence of the request phase: with the requests arriving 71.5
+cycles apart against a 32-cycle slot pattern, an unconstrained model puts 11 % of them
+there.
+
+What happens instead is visible in the traces. Every unclassified read of `0x1ffff`
+outside the four-slot dummy-read block of a normal line -- 335 of them, in the
+sprites-off CPU captures and nowhere else -- sits in one of those 25 slots and is
+followed by a CPU access in the next slot (322 at +26, 10 at +54). So the VDP *does* give
+the slot to the CPU; it just cannot carry a CPU access, spends the memory cycle on a
+dummy read, and does the access one slot later.
+
+That also explains the last of the engine mispredictions in the CPU captures: the engine
+was not skipping a free slot, the slot was occupied by that dummy read.
+
+## 7. Traces that were mislabelled
 
 `scr5-dispOff-hmmv-noCpu-nx2-6d`, `scr5-dispOff-lmmv-noCpu-nx2-3d`,
 `scr5-dispOff-ymmm-noCpu-nx12-1d`, `scr5-sprOff-lmmm-noCpu-nx2-3d` and
 `scr5-sprOff-lmmv-noCpu-nx8-5d` were named `noCpu` but contained CPU accesses. Before
 excluding them they were the *only* source of inconsistency in the middle of a display
-line — every other anomaly is at the blanking boundary or is the sprites-on effect of
+line -- every other anomaly is at the blanking boundary or is the sprites-on effect of
 section 4.2. They have since been fixed or renamed to `scr5-wrong-*` in the measurement
 repository, and the `d` sets have been relabelled.
 
-One labelling subtlety remains, which is not a mistake: the unclassified read of
-`0x1ffff` is the VDP's dummy read in most traces, but in a few YMMM captures the
-command's own source pointer walks through the top of VRAM and produces genuine command
-accesses at that address. The check script distinguishes the two by looking at the rest
-of the trace.
+Two accesses in the CPU captures still carry the wrong code, and they are the only
+remaining mispredictions of the engine model there:
 
-## 8. CPU contention: openMSX's arbitration is confirmed
+* `scr5-sprOn-hmmm-rdCpu-1.txt` has no `R.r` at all: the CPU's reads (0x1849a upwards)
+  are coded `R.s`, together with the command's own source reads (0x1a1c2 upwards).
+* `scr5-sprOn-hmmv-wrCpu-3.txt` has one `R.s 19e91` at cycle 4452 which belongs to the
+  CPU's write sequence (…19e90, 19e91, 19e92…) -- HMMV has no source read.
 
-The `rdCpu` / `wrCpu` traces give 12 302 engine transitions with CPU accesses 64 to 72
-cycles apart — the same rate as the `OUT (#98),A` loop of `vdpcmdx`'s `+CPU` tests — and
-the CPU takes the slot the engine wanted in **29.9 %** of them. Applying openMSX's rule
+One labelling subtlety is not a mistake: the unclassified read of `0x1ffff` is the VDP's
+dummy read in most traces, but in a few YMMM captures the command's own source pointer
+walks through the top of VRAM and produces genuine command accesses at that address. The
+check script distinguishes the two by looking at the rest of the trace.
+
+## 8. The CPU side
+
+### 8.1 The engine model under contention
+
+The `rdCpu` / `wrCpu` traces give 12 302 engine transitions with CPU accesses about 71.5
+cycles apart, and the CPU takes the slot the engine wanted in **30 %** of them. Applying
+openMSX's rule
 
 > the engine takes the first slot at or after its minimum that the CPU did not take
 > (`VDPCmdEngine::stealAccessSlot`)
@@ -351,24 +391,51 @@ to the observed CPU access times:
 
 | | wrong |
 |---|---|
-| openMSX today | 125 (1.016 %) |
-| the model of section 4 | **99 (0.805 %)** |
-| section 4, but the loser re-arms its full delay instead of taking the next slot | 3086 (25.1 %) |
+| openMSX today | 90 (0.732 %) |
+| the model of sections 4 and 6 | **3 (0.024 %)** |
+| the same, but the loser re-arms its full delay instead of taking the next slot | 3086 (25.1 %) |
 
-Two consequences:
+and the remaining 3 are the two mislabelled accesses of section 7. So `stealAccessSlot`
+is right, including the detail that a command engine which loses a slot takes the *next*
+slot rather than re-arming its full delay. The hypothesis floated earlier in
+[sndpl/openMSX#5](https://github.com/sndpl/openMSX/pull/5) -- that under contention real
+hardware uses slots closer together than the command's own minimum spacing -- is
+refuted.
 
-* The `stealAccessSlot` model is right, including the detail that a command engine which
-  loses a slot takes the *next* slot rather than re-arming its full delay.
-* The hypothesis floated earlier in
-  [sndpl/openMSX#5](https://github.com/sndpl/openMSX/pull/5) — that under contention real
-  hardware uses slots closer together than the command's own minimum spacing — is
-  refuted. Outside the blanking-boundary cases the engine never accesses VRAM earlier
-  than its uncontended minimum allows.
+### 8.2 The CPU's own model
 
-So whatever is left of the `+CPU` disagreement in `vdpcmdx` is not in the arbitration
-model. Given that the tool's `REAL` column is a single run on one machine and that
-hardware itself varies by several percent between runs, that column is not a useful
-calibration target; a CPU-loop-period sweep would be.
+`cpu-arbitration-model.py` fits the other half: which slot a CPU port access ends up in.
+The two measurement sets are complementary. The 2013 machine (NMS 8250) has a single
+clock, so the port accesses sit on an exact grid -- 40 of them 72 cycles apart, then 252
+cycles of loop overhead -- with one unknown phase per capture. The 2026 machine (NMS
+8280) has separate CPU and VDP clocks, but /CSR and /CSW were recorded, so the port
+accesses are known individually, to within the analyzer's 0.27-cycle sampling and
+whatever the VDP's input synchroniser adds.
+
+The model:
+
+1. The request register is one deep and is occupied from the port access until about 9
+   cycles before the VRAM access. A port access arriving while it is occupied is **lost**
+   -- no VRAM access happens for it. Overwriting instead (openMSX's assumption) fits far
+   worse: 70 wrong instead of 5 on the 2013 set.
+2. 26 cycles before each slot the VDP decides who gets it; the CPU wins over the command
+   engine. The 26 is measured from the rising edge of /CSx and is uniform over the whole
+   line to ±0.4 cycles (142 display-off slots, 3991 accesses). Like the engine's delays
+   it is counted in the VDP's *memory cycles*: without that correction two 2013 accesses
+   at the first slot after the blanking stretch cannot be explained by any lead.
+3. A slot that follows another slot after 6 cycles is decided 2 cycles earlier still
+   (28.0 ± 0.3 against 26.0 ± 0.4), and carries the dummy read of section 6 instead of the
+   CPU's access.
+
+Fit: 1141 CPU accesses in the 2013 set, 5 not predicted and 5 predicted but absent; 12
+843 in the 2026 set, 1.8 % not predicted, of which the median needs the recorded request
+time moved by 0.13 cycles -- i.e. most of the residue is the asynchronous clock, not the
+model. The predicted number of dummy reads is 336 against 335 observed, and the predicted
+number of lost requests in sprites-on mode, where the slots are up to 70 cycles apart,
+is 314 against about 326 observed.
+
+The lost requests are the reason the 2026 captures show 8 % more /CSx pulses than VRAM
+accesses in sprites-on mode and almost none in display-off mode.
 
 ## 9. What would help next
 

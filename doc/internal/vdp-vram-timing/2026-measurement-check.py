@@ -143,19 +143,24 @@ OPENMSX = {
 OPENMSX_SPR_ON = {('lmmm', 'Rs->Rd'): 48, ('hmmm', 'newline'): 134,
                   ('lmmm', 'newline'): 134}
 
-# Best fit under the refined model: one value per step, +1 with sprites on
+# Best fit under the refined model: one value per step, +1 with sprites on,
+# +1 when the previous access was in a slot only 6 cycles after another slot
 FITTED = {
-    ('hmmv', 'W->W'): 48,  ('hmmv', 'newline'): 104,
-    ('lmmv', 'R->W'): 24,  ('lmmv', 'W->R'): 72,  ('lmmv', 'newline'): 132,
-    ('ymmm', 'R->W'): 24,  ('ymmm', 'W->R'): 38,  ('ymmm', 'newline'): 104,
+    ('hmmv', 'W->W'): 46,  ('hmmv', 'newline'): 104,
+    ('lmmv', 'R->W'): 24,  ('lmmv', 'W->R'): 72,  ('lmmv', 'newline'): 130,
+    ('ymmm', 'R->W'): 24,  ('ymmm', 'W->R'): 36,  ('ymmm', 'newline'): 104,
     ('hmmm', 'R->W'): 24,  ('hmmm', 'W->R'): 60,  ('hmmm', 'newline'): 128,
     ('lmmm', 'Rd->W'): 24, ('lmmm', 'Rs->Rd'): 32, ('lmmm', 'W->Rs'): 60,
     ('lmmm', 'newline'): 128,
     ('line', 'R->W'): 24,  ('line', 'W->R'): 84,  ('line', 'newline'): 120,
 }
 
+# Slots that follow another slot after only 6 cycles.  Only the sprites-off
+# table has them, 25 of its 88.
+TIGHT = {m: {s for s in t if (s - 6) in set(t)} for m, t in TABLES.items()}
+
 PLAIN = [False]     # --plain: VDP cycles, and no sprites-on adjustment
-HACK188 = [True]    # the fitted sprites-off 'slot 188' rule, see below
+TIGHT_RULE = [True]  # the extra cycle after an access in a 6-cycle-pair slot
 PUBLISHED = [False]  # --published-slots: use part2/README.md's slot correction
 
 
@@ -266,19 +271,16 @@ def prev_slot(mode, n):
 def delta_for(table, spron, key, mode, prev=None):
     """Delay for one command step.
 
-    The last clause is a fitted rule with no explanation behind it: in
-    sprites-off mode the line transition of HMMM and LMMM does not use the slot
-    exactly 128 cycles later when the previous access was at slot 188, even
-    though it does from every other slot, and even though display-off does use
-    it from 188.  188 is the second slot of a 6-cycle pair and so is its +128
-    target, but only that one starting slot occurs in the data, so it cannot be
-    turned into a rule.  It is the last of 80734 transitions that the model
-    otherwise gets right.
+    A step that starts from a slot which itself follows another slot after only
+    6 cycles takes one cycle longer -- as if that memory cycle, squeezed against
+    its predecessor, finished one cycle late.  Such slots exist only in the
+    sprites-off table (25 of its 88), which is why the effect shows up in that
+    mode alone.  1778 transitions in the 2026 set start from one; the rule is
+    needed by 32 of them and, at +3 or more, contradicted by 1281.
     """
-    if (HACK188[0] and mode == 'sprOff' and key[1] == 'newline' and
-            key[0] in ('hmmm', 'lmmm') and prev is not None and
-            (prev % TICKS) == 188):
-        return 130
+    if (TIGHT_RULE[0] and prev is not None and
+            (prev % TICKS) in TIGHT[mode] and not PLAIN[0]):
+        return delta_for(table, spron, key, mode) + 1
     if mode == 'sprOn':
         if key in spron:
             return spron[key]
@@ -310,7 +312,14 @@ def count_misses(files, table, spron, cpu_traces=False, plain=None):
     per = collections.Counter()
     for f in files:
         info = meta(f)
-        taken = {a[0] for a in parse(f) if a[1] in CPU_CODES} \
+        # The CPU takes slots away from the engine.  So does the dummy read
+        # the VDP does when the CPU's request wins a 6-cycle-pair slot: it
+        # cannot carry the CPU access, so that memory cycle is spent on a read
+        # of 0x1ffff and the CPU's access happens in the next slot.
+        taken = {a[0] for a in parse(f)
+                 if a[1] in CPU_CODES
+                 or ((a[1], a[2]) == (DUMMY_CODE, DUMMY_ADDR)
+                     and (a[0] % TICKS) in TIGHT[info['mode']])} \
             if cpu_traces else frozenset()
         for step, p, nx in transitions(f):
             key = (info['cmd'], step)
@@ -335,12 +344,12 @@ def main():
                     help='no memory-cycle stretch and no sprites-on +1')
     ap.add_argument('--published-slots', action='store_true',
                     help="use part2/README.md's one-cycle slot correction")
-    ap.add_argument('--no-188', action='store_true',
-                    help='drop the fitted sprites-off slot-188 rule')
+    ap.add_argument('--no-tight', action='store_true',
+                    help='drop the extra cycle after a 6-cycle-pair slot')
     args = ap.parse_args()
     PLAIN[0] = args.plain
     PUBLISHED[0] = args.published_slots
-    HACK188[0] = not args.no_188
+    TIGHT_RULE[0] = not args.no_tight
 
     files = [f for f in sorted(glob.glob(os.path.join(args.slots_dir,
                                                       'scr5-*.txt')))
