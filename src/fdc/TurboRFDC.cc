@@ -8,7 +8,9 @@
  * There's also a mapper mechanism implemented. It's only used on the turboR,
  * but all other machines only have a 16kB diskROM, so it's practically
  * ineffective there. The mapper has 0x7FF0 as switch address. (Thanks to
- * NYYRIKKI for this info.)
+ * NYYRIKKI for this info.) Like the FDC registers, that switch address is
+ * mirrored in page 2, so 0xBFF0 switches the bank as well. (Verified on a
+ * real FS-A1ST.)
  */
 
 #include "TurboRFDC.hh"
@@ -171,7 +173,7 @@ void TurboRFDC::writeMem(uint16_t address, byte value, EmuTime time_)
 		// See comment in readMem().
 		time = getCPU().waitCyclesR800(time, 1);
 	}
-	if (address == 0x7FF0) {
+	if ((address & 0x3FFF) == 0x3FF0) {
 		setBank(value);
 	} else {
 		if (type != Type::R7FF8) { // turboR or BOTH
