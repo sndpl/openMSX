@@ -115,10 +115,17 @@ RELABEL = {'dispOff': {1325: 1324, 1335: 1334},
            'sprOff': {1323: 1322, 1333: 1332},
            'sprOn': {}}
 
-# The two stretched memory cycles: the slot between the two stretches, and the
-# first slot after them.
+# The VDP pads its line out to 1368 cycles by making a few memory cycles in the
+# horizontal blanking region longer than the rest.  Measured from /RAS, and
+# confirmed by the R#9 S1/S0 captures, where the padding disappears and the line
+# is 1365 cycles: display off and sprites off get two cycles of 10 where the
+# rest of that part of the line runs at 8, sprites on gets three cycles one
+# cycle longer than the 14/6/10 pattern it would otherwise have.  Each entry is
+# the cycle at which one stretch has completed; STRETCH_STEP is how many cycles
+# each of them adds.
 STRETCH = {'dispOff': (1334, 1344), 'sprOff': (1332, 1342),
-           'sprOn': (1332, 1342)}
+           'sprOn': (1330, 1337, 1348)}
+STRETCH_STEP = {'dispOff': 2, 'sprOff': 2, 'sprOn': 1}
 
 # VRAM accesses per pixel/byte step, and the role of each
 ROLES = {
@@ -159,6 +166,9 @@ FITTED = {
 # table has them, 25 of its 88.
 TIGHT = {m: {s for s in t if (s - 6) in set(t)} for m, t in TABLES.items()}
 
+# Cycles that sprite rendering adds to every command engine step.
+SPR_ON_EXTRA = 2
+
 PLAIN = [False]     # --plain: VDP cycles, and no sprites-on adjustment
 TIGHT_RULE = [True]  # the extra cycle after an access in a 6-cycle-pair slot
 PUBLISHED = [False]  # --published-slots: use part2/README.md's slot correction
@@ -174,8 +184,9 @@ def V(mode, t):
     if PLAIN[0]:
         return t
     line, c = divmod(t, TICKS)
-    a, b = STRETCH[mode]
-    return t - (4 * line + (0 if c < a else 2 if c < b else 4))
+    step = STRETCH_STEP[mode]
+    seen = sum(1 for a in STRETCH[mode] if c >= a)
+    return t - step * (len(STRETCH[mode]) * line + seen)
 
 
 def meta(path):
@@ -284,7 +295,7 @@ def delta_for(table, spron, key, mode, prev=None):
     if mode == 'sprOn':
         if key in spron:
             return spron[key]
-        return table[key] + (0 if PLAIN[0] else 1)
+        return table[key] + (0 if PLAIN[0] else SPR_ON_EXTRA)
     return table[key]
 
 
@@ -388,7 +399,7 @@ def main():
             a, z = b[k]
             cells.append(f'[{a},{z}]' + ('!' if a > z else ''))
             if mode == 'sprOn' and not args.plain:
-                a, z = a - 1, z - 1     # sprites-on costs one cycle more
+                a, z = a - SPR_ON_EXTRA, z - SPR_ON_EXTRA
             lo, hi = max(lo, a), min(hi, z)
         allb = f'[{lo},{hi}]' + ('   no single value' if lo > hi else '')
         print(f'{cmd:5} {step:9} ' + ' '.join(f'{c:>12}' for c in cells)

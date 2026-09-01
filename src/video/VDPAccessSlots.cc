@@ -160,29 +160,34 @@ protected:
   * documented here:
   *     https://github.com/sndpl/openMSX/pull/5
   *
-  * 'stretch1' / 'stretch2': 2 of the VDP's memory cycles are 10 cycles long
-  * where all the others in that part of the line are 8. The access slots in the
-  * horizontal blanking region are 10 apart there, and the /CAS of those two
-  * slots follows their /RAS by 2 cycles instead of 1. The command engine's
-  * delay counter does not see those 4 cycles, so a delay that spans them takes
-  * 4 more real cycles to be satisfied. The two values are the slots at which
-  * each stretch has completed, i.e. an interval (from, to] costs 2 cycles less
-  * per stretch it contains. 0 means 'not applicable to this table'.
+  * 'stretch' / 'step': the VDP pads its line out to 1368 cycles by making a few
+  * of its memory cycles in the horizontal blanking region longer than the rest.
+  * With the display off and with sprites off there are two such cycles, 10
+  * cycles long where the rest of that part of the line runs at 8 (and the /CAS
+  * of those two follows their /RAS by 2 cycles instead of 1); with sprites on
+  * there are three, each one cycle longer than the 13/6/10 pattern that part of
+  * the line otherwise has. The command engine's delay counter does not see
+  * those padding cycles, so a delay that spans them takes that many more real
+  * cycles to be satisfied. 'stretch' holds the cycle at which each of them has
+  * completed -- an interval (from, to] costs 'step' cycles less per entry it
+  * contains -- and 0 means 'no more'.
   * The underlying reason for this mechanism are the S1/S0 bits in R#9. With these
   * the VDP switches between 1368 and 1365 cycles per line (this is not emulated).
   * And then in 1368-mode, parts of the VDP 'stall' including the command engine
-  * part.
+  * part. Measured directly: with S1,S0 != 0,0 the line is 1365 cycles and those
+  * memory cycles have their ordinary length.
   *
-  * 'extra': added to every command engine step. Sprite rendering costs one
-  * extra cycle, as if the arbitration decision for a slot were taken one cycle
-  * earlier while the sprite fetch logic is active. (In earlier versions we
-  * emulated this with 'sprOn' specific values timing values in LMMM and HMMM).
+  * 'extra': added to every command engine step. Sprite rendering costs two
+  * extra cycles, as if the arbitration decision for a slot were taken two
+  * cycles earlier while the sprite fetch logic is active. (In earlier versions
+  * we emulated this with 'sprOn' specific values timing values in LMMM and
+  * HMMM). The CPU arbitration seems to pay a similar cost.
   *
-  * Both only apply to the V99x8 bitmap tables; the character, text and MSX1
-  * tables have never been measured this way and are left alone. */
+  * All of them only apply to the V99x8 bitmap tables; the character, text and
+  * MSX1 tables have never been measured this way and are left alone. */
 struct Timing {
-	int stretch1 = 0;
-	int stretch2 = 0;
+	std::array<int16_t, 3> stretch = {};
+	int step = 0;
 	int extra = 0;
 };
 
@@ -201,8 +206,9 @@ struct CycleTable : AccessTable
 		// Distance from cycle 'i' to slot 's' as the command engine counts it.
 		auto dist = [&](int i, int s) {
 			int d = s - i;
-			if ((i < timing.stretch1) && (timing.stretch1 <= s)) d -= 2;
-			if ((i < timing.stretch2) && (timing.stretch2 <= s)) d -= 2;
+			for (auto a : timing.stretch) {
+				if (a && (i < a) && (a <= s)) d -= timing.step;
+			}
 			return d;
 		};
 
@@ -269,11 +275,11 @@ struct ZeroTable : AccessTable
 {
 };
 
-static constexpr CycleTable tabSpritesOn    {false, slotsSpritesOn,  Timing{.stretch1 = 1332, .stretch2 = 1342, .extra = 1}};
-static constexpr CycleTable tabSpritesOff   {false, slotsSpritesOff, Timing{.stretch1 = 1332, .stretch2 = 1342, .extra = 0}};
+static constexpr CycleTable tabSpritesOn    {false, slotsSpritesOn,  Timing{.stretch = {1330, 1337, 1348}, .step = 1, .extra = 2}};
+static constexpr CycleTable tabSpritesOff   {false, slotsSpritesOff, Timing{.stretch = {1332, 1342}, .step = 2, .extra = 0}};
 static constexpr CycleTable tabChar         {false, slotsChar};
 static constexpr CycleTable tabText         {false, slotsText};
-static constexpr CycleTable tabScreenOff    {false, slotsScreenOff,  Timing{.stretch1 = 1334, .stretch2 = 1344, .extra = 0}};
+static constexpr CycleTable tabScreenOff    {false, slotsScreenOff,  Timing{.stretch = {1334, 1344}, .step = 2, .extra = 0}};
 static constexpr CycleTable tabMsx1Gfx12    {true,  slotsMsx1Gfx12};
 static constexpr CycleTable tabMsx1Gfx3     {true,  slotsMsx1Gfx3};
 static constexpr CycleTable tabMsx1Text     {true,  slotsMsx1Text};

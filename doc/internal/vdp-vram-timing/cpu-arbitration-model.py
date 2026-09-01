@@ -56,13 +56,11 @@ import statistics
 import sys
 
 TICKS = 1368
-LEAD = 27                # cycles, from the rising edge of /CSx
+LEAD = 16                # the arbiter's lookahead, in memory cycles
+DEAD = 2                 # cycles after an access during which a new port
+                         # access is still lost
 PAIR_EXTRA_LEAD = 2      # extra lead of a slot 6 cycles after another slot
-# The register frees this many cycles before the access, not at the access
-# itself: fitted on the 2013 set, where 9 is the unique optimum (7-8 and 10-11
-# are each worse by a handful), and confirmed on the 2026 set, where it predicts
-# 314 lost requests in sprites-on mode against about 326 observed.
-FREE_BEFORE = [9]
+FREE_BEFORE = [-DEAD]
 PERIOD_2013 = 3060       # 39 * 72 + 252
 IN_PERIOD = 72
 BURST = 40
@@ -90,29 +88,24 @@ PAIR = {m: {s for s in TABLES[m] if (s - 6) in set(TABLES[m])} for m in TABLES}
 # --------------------------------------------------------------------------
 def V(mode, t):
     """Memory-cycle time: real time minus the blanking stretch seen so far."""
-    line, c = divmod(int(t) if t == int(t) else t // 1, TICKS)
-    line, c = divmod(t, TICKS)
-    a, b = C.STRETCH[mode]
-    return t - (4 * line + (0 if c < a else 2 if c < b else 4))
-
-
-# How many of the 4 stretch cycles per line the CPU's lead absorbs.  The
-# command engine's delays absorb all 4; the CPU's lead absorbs 1, 2 or 3 (each
-# fits the 2013 set exactly, 0 and 4 do not).
-CPU_STRETCH = [2]
+    return C.V(mode, t)
 
 
 def decision(mode, s):
-    """Real time at which slot s is handed out."""
+    """Real time at which slot s is handed out.
+
+    The lookahead is counted in the VDP's memory cycles, exactly as the command
+    engine's delays are: the cycles the VDP pads the line with in the blanking
+    region do not count towards it.
+    """
     lead = LEAD + (PAIR_EXTRA_LEAD if (s % TICKS) in PAIR[mode] else 0)
-    base = s - lead
     want = V(mode, s) - lead
-    t = base
+    t = s - lead
     while V(mode, t) > want:
         t -= 1
     while V(mode, t + 1) <= want:
         t += 1
-    return base - ((base - t) * CPU_STRETCH[0]) // 4
+    return t
 
 
 def slots(mode, lo, hi):
@@ -344,11 +337,17 @@ def fit_pace(req):
     # two /CSx edges a few cycles apart cannot both be port accesses
     req = [r for i, r in enumerate(req) if i == 0 or r - req[i - 1] > 40]
     g = [b - a for a, b in zip(req, req[1:])]
-    s0 = statistics.median([x for x in g if 60 < x < 85]) / 12
+    # Two test programs: 40 x IN/OUT 12 T-states apart with 42 T-states from
+    # one burst to the next, and 20 x IN 37 T-states apart with 67 between
+    # bursts ('rdCpu222').
+    inner = statistics.median(x for x in g if x < 300)
+    step, tail = ((12, 42) if inner < 150 else (37, 67))
+    s0 = inner / step
     x = [0]
     for gap in g:
-        x.append(x[-1] + (42 if 240 < gap < 262
-                          else 12 * max(1, round(gap / (12 * s0)))))
+        n = round(gap / (step * s0))
+        x.append(x[-1] + (tail if abs(gap - tail * s0) < 20 * s0 / step
+                          else step * max(1, n)))
     keep = list(range(len(req)))
     s, phi, rms = s0, 0.0, 0.0
     for _ in range(4):
@@ -400,9 +399,12 @@ def run2026(repo, drop=True, quantum=1):
         rmss.append(rms)
         base = [phi + s * a for a in xs]
         lo, hi = obs[0] - 100, obs[-1] + 100
+        # the constant delay between the port access and the arbiter, fitted
+        # per capture: it also absorbs the residual alignment of the capture's
+        # own time base
         best = None
-        o = -6.0
-        while o < 6.0:
+        o = -8.0
+        while o < 24.0:
             # the VDP can only see a request at one of its own clock edges
             rq = [(quantum * math.ceil((b + o) / quantum) if quantum
                    else b + o) for b in base if lo - 150 < b + o < hi]
@@ -415,7 +417,8 @@ def run2026(repo, drop=True, quantum=1):
                 best = (score, o, ps, pds, lost, len(rq))
             o += 0.05
         _, off, ps, pds, lost, nreq = best
-        k = agg[mode]
+        pace = '222' if 'Cpu222' in name else ' 72'
+        k = agg[(pace, mode)]
         k['n'] += len(obs)
         k['miss'] += len(set(obs) - ps)
         k['extra'] += len(ps - set(obs))
@@ -425,25 +428,27 @@ def run2026(repo, drop=True, quantum=1):
         k['lost'] += lost
         k['req'] += nreq
         k['cap'] += 1
-        offs[mode].append(off)
+        offs[(pace, mode)].append(off)
     print(f'pace: {statistics.fmean(rates):.5f} +- {statistics.stdev(rates):.5f}'
           f' VDP cycles per Z80 T-state ({12 * statistics.fmean(rates):.4f} '
           f'cycles between port accesses; 6 and 72 on a single-clock machine), '
           f'fit residual {statistics.median(rmss):.3f} cycles')
     print(f'requests quantised to {quantum} VDP cycle(s)'
           if quantum else 'requests not quantised')
-    print(f'{"mode":8} {"cap":>4} {"accesses":>9} {"missed":>7} '
+    print(f'{"pace":4} {"mode":8} {"cap":>4} {"accesses":>9} {"missed":>7} '
           f'{"spurious":>9} {"dummy":>6} {"d-miss":>7} {"lost/req":>10} '
           f'{"offset":>13}')
-    for mode in ('dispOff', 'sprOff', 'sprOn'):
-        k = agg[mode]
-        if not k['n']:
-            continue
-        sd = statistics.stdev(offs[mode]) if len(offs[mode]) > 1 else 0.0
-        print(f'{mode:8} {k["cap"]:4} {k["n"]:9} {k["miss"]:7} {k["extra"]:9} '
-              f'{k["dn"]:6} {k["dmiss"]:7} '
-              f'{k["lost"]:5}/{k["req"]:<5} '
-              f'{statistics.fmean(offs[mode]):6.2f} +-{sd:5.2f}')
+    for pace in (' 72', '222'):
+        for mode in ('dispOff', 'sprOff', 'sprOn'):
+            k = agg[(pace, mode)]
+            if not k['n']:
+                continue
+            o = offs[(pace, mode)]
+            sd = statistics.stdev(o) if len(o) > 1 else 0.0
+            print(f'{pace:4} {mode:8} {k["cap"]:4} {k["n"]:9} {k["miss"]:7} '
+                  f'{k["extra"]:9} {k["dn"]:6} {k["dmiss"]:7} '
+                  f'{k["lost"]:5}/{k["req"]:<5} '
+                  f'{statistics.fmean(o):6.2f} +-{sd:5.2f}')
     n = sum(agg[m]['n'] for m in agg)
     miss = sum(agg[m]['miss'] for m in agg)
     print(f'\n{n} CPU accesses: {miss} not predicted '
