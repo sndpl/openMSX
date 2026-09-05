@@ -145,19 +145,32 @@ def geometry(edges):
     return (edges[marks[-1]] - edges[marks[0]]) / (len(marks) - 1), marks
 
 
-def refresh_chain_start(acc, cyc):
+def refresh_chain_start(acc, cyc, strict=True):
     """RAS sample of the first refresh access of a line, or None.
 
     Refresh accesses are 128 cycles apart with the row address incrementing by
     one and the bank alternating; the gap before the first of a line is 472.
+
+    Row and bank alone are not enough: in screen 5 a bitmap fetch can look like
+    the next link of the chain, and a single false link moves the anchor by a
+    refresh cell or by a whole line.  Refresh accesses are single /CAS, where a
+    bitmap fetch is a burst, which rules those out.  (The column address is
+    *not* constant along the chain -- it carries when the row counter wraps --
+    so it cannot be used as a test.)  A handful of captures have no chain that
+    passes, and fall back to the loose rule.
     """
+    per = collections.Counter(a[1] for a in acc)
     ts = sorted(acc, key=lambda a: a[1])
     ref = set()
     for i, a in enumerate(ts):
+        if strict and per[a[1]] != 1:
+            continue
         for b in ts[i + 1:]:
             d = (b[1] - a[1]) * cyc
             if d > 131:
                 break
+            if strict and per[b[1]] != 1:
+                continue
             if abs(d - 128) < 2.5 and \
                ((b[2] >> 8) & 0xFF) == (((a[2] >> 8) & 0xFF) + 1) & 0xFF and \
                (b[2] >> 16) != (a[2] >> 16):
@@ -166,6 +179,8 @@ def refresh_chain_start(acc, cyc):
     r = sorted(ref)
     starts = [t for i, t in enumerate(r)
               if i and (t - r[i - 1]) * cyc > 200]
+    if not starts and strict:
+        return refresh_chain_start(acc, cyc, strict=False)
     return (starts[0], ref) if starts else (None, ref)
 
 

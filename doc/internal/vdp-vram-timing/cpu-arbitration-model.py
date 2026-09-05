@@ -337,11 +337,14 @@ def fit_pace(req):
     # two /CSx edges a few cycles apart cannot both be port accesses
     req = [r for i, r in enumerate(req) if i == 0 or r - req[i - 1] > 40]
     g = [b - a for a, b in zip(req, req[1:])]
-    # Two test programs: 40 x IN/OUT 12 T-states apart with 42 T-states from
-    # one burst to the next, and 20 x IN 37 T-states apart with 67 between
-    # bursts ('rdCpu222').
+    # The test loops, in Z80 T-states between port accesses and from the last
+    # access of a burst to the first of the next:
+    #   IN/OUT x40                  12, 42   ('rdCpu', 'wrCpu', 'rdwrCpu')
+    #   IN ; NOP ; NOP              22, 52   ('rdCpu132', 'wrCpu132')
+    #   IN x20, slow                37, 67   ('rdCpu222')
     inner = statistics.median(x for x in g if x < 300)
-    step, tail = ((12, 42) if inner < 150 else (37, 67))
+    step, tail = min(((12, 42), (22, 52), (37, 67)),
+                     key=lambda st: abs(inner / st[0] - 5.96))
     s0 = inner / step
     x = [0]
     for gap in g:
@@ -417,7 +420,9 @@ def run2026(repo, drop=True, quantum=1):
                 best = (score, o, ps, pds, lost, len(rq))
             o += 0.05
         _, off, ps, pds, lost, nreq = best
-        pace = '222' if 'Cpu222' in name else ' 72'
+        pace = ('222' if 'Cpu222' in name else
+                '132' if 'Cpu132' in name else
+                'r/w' if 'rdwrCpu' in name else ' 72')
         k = agg[(pace, mode)]
         k['n'] += len(obs)
         k['miss'] += len(set(obs) - ps)
@@ -438,7 +443,7 @@ def run2026(repo, drop=True, quantum=1):
     print(f'{"pace":4} {"mode":8} {"cap":>4} {"accesses":>9} {"missed":>7} '
           f'{"spurious":>9} {"dummy":>6} {"d-miss":>7} {"lost/req":>10} '
           f'{"offset":>13}')
-    for pace in (' 72', '222'):
+    for pace in (' 72', '132', '222', 'r/w'):
         for mode in ('dispOff', 'sprOff', 'sprOn'):
             k = agg[(pace, mode)]
             if not k['n']:

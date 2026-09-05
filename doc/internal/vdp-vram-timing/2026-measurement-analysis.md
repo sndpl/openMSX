@@ -455,16 +455,35 @@ times are rounded up to whole VDP cycles. That is worth something: rounding to 1
 beats no rounding, rounding to 2, and rounding to 4, in that order. So the VDP samples
 /CSx on a 1-cycle grid.
 
-Per pace and mode, with the constant of point 1 fitted per capture:
+Per pace and mode, with the constant of point 1 fitted per capture. The four loops are
+`IN`/`OUT` x40 (72 cycles apart), `IN ; NOP ; NOP` (132), `IN` x20 slow (222), and
+`IN ; OUT` alternating (r/w):
 
 | pace | mode | accesses | not predicted | lost requests | constant |
 |---|---|---|---|---|---|
 | 72 | display off | 7729 | 74 (0.96 %) | 0 of 7833 | 9.86 ± 0.12 |
-| 72 | sprites off | 6377 | 24 (0.38 %) | 22 of 6443 | 9.86 ± 0.13 |
+| 72 | sprites off | 6378 | 24 (0.38 %) | 22 of 6443 | 9.86 ± 0.13 |
 | 72 | sprites on | 3703 | 57 (1.54 %) | 305 of 4022 | 12.05 ± 2.01 |
+| 132 | display off | 368 | 1 (0.27 %) | 0 of 374 | 9.97 ± 0.08 |
+| 132 | sprites off | 374 | 1 (0.27 %) | 0 of 376 | 9.62 ± 0.35 |
+| 132 | sprites on | 991 | 2 (0.20 %) | 0 of 1000 | 11.40 ± 0.55 |
 | 222 | display off | 675 | 1 (0.15 %) | 0 of 685 | 9.75 ± 0.22 |
 | 222 | sprites off | 608 | **0** | 0 of 610 | 9.72 ± 0.30 |
-| 222 | sprites on | 641 | 2 (0.31 %) | 0 of 646 | 10.55 ± 1.12 |
+| 222 | sprites on | 642 | 2 (0.31 %) | 0 of 646 | 10.55 ± 1.12 |
+| r/w | display off | 681 | 10 (1.47 %) | 0 of 691 | 9.83 ± 0.13 |
+| r/w | sprites off | 568 | 1 (0.18 %) | 1 of 577 | 9.92 ± 0.20 |
+| r/w | sprites on | 636 | 2 (0.31 %) | 50 of 690 | 11.86 ± 0.26 |
+
+**The constant is a per-mode number**: 9.8 ± 0.1 with the display off and with sprites
+off, across four loops and three CPU paces, and about 1.9 cycles more with sprites on.
+That is the same direction and about the same size as the command engine's extra cycle
+in that mode.
+
+**Reads and writes are the same.** The `r/w` captures alternate `IN A,(#98)` and
+`OUT (#98),A`, so a difference between the two would show up as every other request being
+misplaced. Fitting a separate constant for writes puts the difference at **0.0 cycles**,
+with 13 mispredictions of 1885 at 0.0 against 32 at −1 and 52 at +1: the same delay to
+within about a third of a cycle.
 
 The 222-cycle captures are the ones with a slow CPU loop, made specifically to remove the
 lost requests, and they do: 3 of 1924 accesses mispredicted, and one whole mode exact.
@@ -606,3 +625,56 @@ for the border proper but wrong for those two lines per frame -- one before the 
 area, which really uses the sprites-on table, and the last display line, which uses it
 while fetching no sprites. It is worth two lines out of 262 and only matters to a command
 running exactly there.
+
+## 13. How well the lookahead and the pin delay separate
+
+The lead from the /CSx edge to the granted slot is about 26 cycles, made of a wall-clock
+pin delay and a lookahead counted in memory cycles. Only the lookahead sees the padding,
+so the two are separable only on requests whose window straddles it — which is what the
+`IN ; NOP ; NOP` loop supplies: 22 T-states is near-coprime with the 128-cycle refresh
+cell, so one capture creeps through every phase instead of visiting two or three.
+
+Holding the sum at 26 and scanning the split (the constant is refitted per capture each
+time):
+
+| lookahead | 0 | 4 | 8 | 12 | 14 | 16 | 18 | 20 | 24 | 28 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| the 132 loop, of 1733 | 11 | 6 | 6 | **4** | **4** | **4** | 6 | 6 | 6 | 10 |
+| all display-off, of 4888 | 104 | 93 | 93 | 75 | 75 | 75 | **68** | **68** | **68** | 83 |
+
+So the split is real: a lookahead of 0 (all of it wall-clock, no padding seen) and one of
+28 (all of it counted in memory cycles) are both excluded, from both directions. The
+optimum is broad and the two corpora disagree slightly about where it sits — 12..16 on the
+designed experiment, 18..24 on the larger display-off set, a difference of 7 accesses in
+4888. The 2013 set is the sharp constraint: there the lookahead must be at most 16, and 17
+already costs 10 of 1141. 16 is the value that satisfies all three, and it is what openMSX
+already uses.
+
+**Horizontal set-adjust is very nearly invisible to the CPU.** Moving the padding with
+R#18 should move the CPU's granted slot for the few requests whose window straddles it.
+Fitting the `stop-rdCpu-adjust*` captures with the padding at its R#18 = 0 position and
+with it shifted by 4 cycles per unit: 26 versus 22 mispredictions over 1837 display-off
+accesses, and 22 versus 19 over 1830 sprites-off ones. The shifted version is better in
+both, which is the direction the model predicts, but seven accesses out of 3667 is not a
+measurement.
+
+## 14. A trap in finding the refresh chain
+
+Everything here is anchored on the refresh accesses: they are 128 cycles apart, the row
+address increments and the bank alternates, and the gap before the first of a line is 472.
+Row and bank alone are not enough. In screen 5 an ordinary access can supply a false link,
+and one false link moves the anchor by a refresh cell or, in one capture, by a whole line —
+which is invisible in slot arithmetic, because 128 is a multiple of the slot spacing, but
+wrong for anything that compares VRAM accesses with the /CSx pins.
+
+Requiring a single /CAS as well (bitmap fetches are bursts) fixes it: 16 of 1051 captures
+are anchored differently with and without that test, and the CPU model improves from
+0.93 % to 0.75 % mispredicted.
+
+What does *not* work is requiring a constant column address along the chain. The column
+is not constant: it carries when the row counter wraps, e.g.
+```
+row 7c col 7f   row 7d col 7f   row 7e col 7f   row 7f col 7f   row 80 col bf   row 81 col bf
+```
+so that test breaks the chain in the middle and makes matters worse. The VDS pin would be
+the clean discriminator if one is needed.
