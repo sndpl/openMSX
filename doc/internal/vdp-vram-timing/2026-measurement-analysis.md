@@ -182,20 +182,20 @@ cycles per line, so it is well defined for an interval but not as a periodic rem
 the line. That is exactly how the engine behaves — it is a delay from the previous
 access, not a position in the line.
 
-### 4.2 With sprites on, every delay is two cycles longer
+### 4.2 With sprites on, every delay is a cycle or two longer
 
 With 4.1 in place, every step becomes internally consistent in every mode, and the steps
 that still need a sprites-on distinction all need the *same* extra amount. So one rule
 replaces the three per-command special cases: **with sprite rendering active every
-command-engine delay is two cycles longer.** It reads like the arbitration decision for a
-slot being taken two cycles earlier while the sprite fetch logic is active — the CPU
-arbitration wants a similar amount (section 8.2). It cannot be a slot-position effect:
+command-engine delay is one or two cycles longer.** It reads like the arbitration decision
+for a slot being taken earlier while the sprite fetch logic is active — the CPU
+arbitration wants something similar (section 8.2). It cannot be a slot-position effect:
 shifting the sprites-on slots would leave intervals within that mode unchanged.
 
-The size of this depends on how much padding sprites-on mode has in the blanking region,
-which is why section 4.4 had to be settled first: with the padding measured directly the
-answer is two cycles, and LMMM's source→destination read and the line transition come out
-at the round 32 and 128 that the other two modes already want.
+The measurements admit 1 and 2 and cannot separate them, because the sprites-on bands are
+the widest of the three modes. openMSX uses 1. Either value forces LMMM's
+source→destination read and the line transition to the round 32 and 128 that the other
+two modes already want.
 
 ### 4.3 The resulting values
 
@@ -258,23 +258,23 @@ columns changed.
 ### 4.4 Where the padding is, per mode
 
 The stretch of 4.1 is the VDP padding its line out to 1368 cycles. Measured from /RAS over
-the whole blanking region, not just the slots the command engine can use, the three
-bitmap modes do it differently:
+the whole blanking region, not just the slots the command engine can use, the total is 4
+cycles in every bitmap mode, but it is not distributed the same way:
 
-| mode | ordinary spacing there | padded cycles | total |
+| mode | ordinary spacing there | padded memory cycles | total |
 |---|---|---|---|
-| display off | 8 | two of 10, at 1324→1334→1344 | +4 |
-| sprites off | 8 | two of 10, at 1322→1332→1342 | +4 |
-| sprites on | 13, 6, 10 repeating | three of 15, 7, 11, at 1315→1330→1337→1348 | +3 |
+| display off | 8 | two of 10, completing at 1334 and 1344 | +2 +2 |
+| sprites off | 8 | two of 10, completing at 1332 and 1342 | +2 +2 |
+| sprites on | 13, 6, 10 | 15, 7, 11, completing at 1330, 1337, 1348 | +2 +1 +1 |
 
-The sprites-on row was guesswork until the `s16`/`s32`/`s48` captures arrived, because in
-that mode the padded cycles are sprite fetches rather than command slots. Section 10 shows
-how those captures settle it.
+The sprites-on row was guesswork until the R#9 S1/S0 captures arrived, because in that
+mode the padded cycles are sprite fetches rather than command slots. Section 10 shows how
+those captures settle both the positions and the total.
 
-Getting it right matters: with the sprites-on padding assumed to be +4 like the other two
-modes, the sprites-on cost of 4.2 comes out as one cycle instead of two, and the fit is
-equally good. Both were consistent with the command traces; the direct measurement is what
-separates them.
+Getting it right matters more for the positions than for the total: with the sprites-on
+padding assumed to sit at 1332 and 1342 like the other two modes, 25 of the 16416 entries
+of the sprites-on lookup table come out differently. The command traces cannot separate
+the two — both reproduce every transition — but the /RAS comb can.
 
 ## 5. History: the parameter-only fix
 
@@ -439,7 +439,7 @@ Fit:
 | set | CPU accesses | not predicted | predicted but absent |
 |---|---|---|---|
 | 2013, exact grid, one phase per capture | 1141 | **0** | **0** |
-| 2026, fitted pace, one offset per capture | 14766 | 121 (0.82 %) | 116 |
+| 2026, fitted pace, one offset per capture | 19733 | 158 (0.80 %) | 126 |
 
 For the 2026 set the requests are not taken from the individual /CSx edges but from a
 straight line fitted through the whole capture: the Z80's own crystal makes the port
@@ -450,35 +450,34 @@ would give exactly 6 -- the Z80 of that NMS 8280 runs 0.65 % fast relative to it
 Two different test programs (40 port accesses 12 T-states apart, and 20 of them 37
 T-states apart) give the same rate to 1 part in 10^5.
 
-The VDP can only act on an asynchronous /CSx at one of its own clock edges, so the
-request times are rounded up to whole VDP cycles. That is worth something: 143
-mispredictions with the rounding, 165 without, 168 if the rounding is to 2 cycles and 833
-if it is to 4 (measured before the model was changed to the split form above, but the
-ordering is what matters). So the VDP samples /CSx on a 1-cycle grid.
+The VDP can only act on an asynchronous /CSx at one of its own clock edges, so the request
+times are rounded up to whole VDP cycles. That is worth something: rounding to 1 cycle
+beats no rounding, rounding to 2, and rounding to 4, in that order. So the VDP samples
+/CSx on a 1-cycle grid.
 
 Per pace and mode, with the constant of point 1 fitted per capture:
 
 | pace | mode | accesses | not predicted | lost requests | constant |
 |---|---|---|---|---|---|
-| 72 | display off | 4793 | 43 (0.90 %) | 0 of 4848 | 9.85 ± 0.12 |
-| 72 | sprites off | 4346 | 16 (0.37 %) | 12 of 4385 | 9.84 ± 0.11 |
-| 72 | sprites on | 3703 | 59 (1.59 %) | 304 of 4022 | 12.10 ± 2.01 |
+| 72 | display off | 7729 | 74 (0.96 %) | 0 of 7833 | 9.86 ± 0.12 |
+| 72 | sprites off | 6377 | 24 (0.38 %) | 22 of 6443 | 9.86 ± 0.13 |
+| 72 | sprites on | 3703 | 57 (1.54 %) | 305 of 4022 | 12.05 ± 2.01 |
 | 222 | display off | 675 | 1 (0.15 %) | 0 of 685 | 9.75 ± 0.22 |
 | 222 | sprites off | 608 | **0** | 0 of 610 | 9.72 ± 0.30 |
-| 222 | sprites on | 641 | 2 (0.31 %) | 0 of 646 | 10.61 ± 1.18 |
+| 222 | sprites on | 641 | 2 (0.31 %) | 0 of 646 | 10.55 ± 1.12 |
 
 The 222-cycle captures are the ones with a slow CPU loop, made specifically to remove the
 lost requests, and they do: 3 of 1924 accesses mispredicted, and one whole mode exact.
 The constant repeats to ±0.01 cycles between display-off and sprites-off and to ±0.15
-between the two paces, which is a good check on the whole chain -- the analyzer time
-base, the slot grid, the pace fit and the model. Sprites-on wants 1 to 2 cycles more, in
-the same direction as the command engine's two extra cycles in that mode, but with a much
-larger scatter because that mode has the fewest slots per line.
+between the two paces, which is a good check on the whole chain -- the analyzer time base,
+the slot grid, the pace fit and the model. Sprites-on wants 1 to 2 cycles more, in the
+same direction as the command engine's extra cycle in that mode, but with a much larger
+scatter because that mode has the fewest slots per line.
 
-Of the 121 that are left, 21 are the *first* access of their capture, which is 15 times
+Of what is left, about a sixth are the *first* access of their capture, some fifteen times
 the rate the remaining positions show. That is the one thing the model cannot know: a
 capture starts at an arbitrary point in the test program, so there may already be a
-request in flight. 107 of the other 112 are isolated single slots.
+request in flight. Almost all the others are isolated single slots.
 
 ## 9. What would help next
 
@@ -503,38 +502,107 @@ request in flight. 107 of the other 112 are isolated single slots.
   goes, but openMSX does not implement those modes at all. If it ever does, the
   prediction is that the command engine needs no padding correction there.
 
-## 10. Where the padding comes from: R#9 S1/S0, measured
+## 10. Where the padding comes from: R#9 S1/S0 and R#18, measured
 
 The V9938 data book documents bits S1 and S0 of R#9 as selecting one of three "cycle
 modes", and gives 1368 cycles per horizontal line for S1,S0 = 0,0 but 1365 for the other
 two settings (section 5 "Cycle mode" and section 7-1 "Horizontal display parameters").
-The `scr5-sprOn-hmmv-noCpu-s{0,16,32,48}-*e.vcd` captures test that directly. Taking the
-line period and the refresh interval both in analyzer samples, so that nothing has to be
-assumed about either, the line comes out as 128 x period / refresh:
+The `scr5-spr{On,Off}-hmmv-noCpu-s{0,16,32,48}-*e.vcd` captures test that directly. Taking
+the line period and the refresh interval both in analyzer samples, so that nothing has to
+be assumed about either, the line comes out as 128 x period / refresh:
 
-| R#9 | line length |
-|---|---|
-| s = 0 | 1368.01 ± 0.04 |
-| s = 16 | 1364.94 ± 0.12 |
-| s = 32 | 1364.94 ± 0.09 |
-| s = 48 | 1365.01 ± 0.10 |
+| R#9 | sprites off | sprites on |
+|---|---|---|
+| s = 0 | 1368.14 ± 0.00 | 1367.97 ± 0.03 |
+| s = 16 | 1365.03 ± 0.02 | 1364.98 ± 0.03 |
+| s = 32 | 1365.04 ± 0.03 | 1364.95 ± 0.04 |
+| s = 48 | — | 1365.01 ± 0.10 |
 
-So 1368 and 1365 exactly, as documented. And the three cycles come off precisely where
-section 4.1 says the padding is: in sprites-on mode the blanking region runs
+1368 and 1365 exactly, as documented, in both modes. And the three cycles come off
+precisely where section 4.4 says the padding is:
 
 ```
-S1,S0 = 0,0 :  ... 13   6  10   6  10   6  13  [15   7  11]  6  10   6  13  13   6 ...
-otherwise   :  ... 13   6  10   6  10   6  13  [14   6  10]  6  10   6  13  13   6 ...
+sprites off, 1368:  ... 1314 -8- 1322 -10- 1332 -10- 1342 -8- 1350 ...
+sprites off, 1365:  ... 1314 -8- 1322  -9- 1331  -8- 1339 -8- 1347 ...
+
+sprites on,  1368:  ... 1315 -15- 1330  -7- 1337 -11- 1348 -6- 1354 ...
+sprites on,  1365:  ... 1315 -14- 1329  -6- 1335 -10- 1345 -6- 1351 ...
 ```
 
-— the same grid with three memory cycles one cycle shorter, which is the 1365-cycle line
-plus the padding. Everything else in the line is unchanged, and the horizontal
-set-adjust captures (`adjust0` … `adjust15`) leave the line at 1368.02 ± 0.03 in all five
-settings, as expected.
+**The 1365 line does not remove all the padding.** In sprites-off the pair goes from
+10 + 10 = 20 to 9 + 8 = 17, where the unpadded value would be 8 + 8 = 16; in sprites-on
+the trio goes from 15 + 7 + 11 = 33 to 14 + 6 + 10 = 30, where the rest of that part of
+the line runs 13 + 6 + 10 = 29. So a 1365-cycle line still carries one cycle of padding,
+and the 1368-cycle line carries four — in both modes, which is what makes it four in the
+sprites-on model as well. (Reading the difference as "the whole padding" would put the
+sprites-on total at 3, which is what an earlier version of this document did.)
 
-That confirms the mechanism behind section 4.1: the padding is real, it sits in the
-blanking region, and the command engine's delay counter does not see it. It also fixes
-the amount per mode, which section 4.4 could not do from the command traces alone.
+**Horizontal set-adjust moves the padding but never its total.** All 16 values of R#18 in
+all three modes: the line stays at 1368 to ±0.1 cycles, nothing before cycle ~1290 moves,
+and the padding block slides at 4 cycles per unit — one screen-5 pixel — with R#18 0..7
+shifting it later and 8..15 (i.e. −8..−1) earlier. Even values keep the two-of-+2 shape,
+odd values sit half a memory cycle away and spread the same 4 cycles as +1, +2, +1:
 
-Data book: <https://www.mirrorservice.org/sites/www.bitsavers.org/pdf/yamaha/Yamaha_V9938_MSX-Video_Technical_Data_Book_Aug85.pdf>,
-transcription: <https://map.grauw.nl/resources/video/v9938/v9938.xhtml>.
+```
+R#18 = 0:  1334:+2  1344:+2          R#18 = 1:  1333:+1  1343:+2  1352:+1
+R#18 = 2:  1342:+2  1352:+2          R#18 = 3:  1341:+1  1351:+2  1360:+1
+R#18 = 8:  1302:+2  1312:+2          R#18 = 9:  1301:+1  1311:+2  1320:+1
+```
+
+The total is invariant at +4, which is an independent confirmation of the paragraph above.
+openMSX has one table per mode with the padding at its R#18 = 0 position, so a program
+that changes the set-adjust gets the padding in the wrong place — worth at most 4 cycles
+on a command step that crosses it, and it would cost 16 tables per mode to fix.
+
+## 11. The command start delay
+
+`scr5-dispOff-hmmv-noCpu-nx4-ny2-*e` restarts a 4x2 HMMV in a loop, so the interval
+between the `OUT` that writes R#46 and the command's first VRAM access is visible. Six
+launches, everything read from the .vcd (the `5.slots` files are shifted by a line):
+
+| capture | last /CSW | first access | slot | admissible S0 |
+|---|---|---|---|---|
+| 1f | 2828.8 | 2923.9 | 188 | (87.2, 95.2] |
+| 2f | −9.8 | 87.8 | 88 | (89.8, 97.8] |
+| 3f | −1277.0 | −1179.9 | 188 | (89.0, 97.0] |
+| 4f | 2775.4 | 2899.9 | 164 | (80.6, 124.6] |
+| 5f | 1456.3 | 1556.0 | 188 | (91.7, 99.7] |
+| 6f | 2750.3 | 2847.8 | 112 | (89.7, 97.7] |
+
+Treating the start like any other wait — the first slot at least S0 memory cycles after
+the trigger — the six intersect at **S0 = 92..95 cycles from the rising edge of /CSW**.
+(4f is the wide one because its slot follows the 44-cycle hole at 120→164.)
+
+openMSX uses `Delta::D0`: it starts the command at the first slot at or after the port
+write. Its port-write timestamp is T-state 9 of the 12-T-state `OUT (n),A`
+(`CC_OUT_N_A_2` in `Z80.hh`), and the rising edge of /CSx is the end of that instruction,
+3 T-states later, so in openMSX's terms the measured start delay is about 92 + 18 = 110
+cycles — some 13 display-off slots later than openMSX starts. Not emulated; the number is
+here for when someone wants to.
+
+## 12. The sprite-fetch line, and what openMSX gets wrong there
+
+`scr5-dispOff-sprOn-stop-noCmd-1f` and `scr5-sprOn-dispOff-stop-noCmd-1f` capture the
+vertical border boundary. Sprite attributes for a display line are fetched during the
+*previous* line, so the access pattern cannot simply follow the display area. Counting
+what each line actually does -- burst reads (real bitmap fetches), dummy reads of 0x1FFFF,
+and ordinary single accesses:
+
+| line | bursts | dummies | singles | |
+|---|---|---|---|---|
+| last border line | 8 | 34 | 44 | sprites-on comb, bitmap fetches dummied out |
+| display lines | 48 | 2 | 48 | |
+| last display line | 41 | 45 | 12 | bitmap still fetched, sprite slots dummied out |
+| first border line | 0 | 16 | 1 | display-off comb |
+
+So the line before the display area already runs the sprites-on access pattern, with its
+32 bitmap slots spent on dummy reads, and the last display line still fetches bitmap while
+dummying out every sprite slot. In this analysis's numbering the comb changes at the line
+boundary rather than part-way through a line; what identifies the extra line is which
+accesses are real.
+
+openMSX's `getTab()` returns `tabScreenOff` for the whole vertical border, which is right
+for the border proper but wrong for those two lines per frame -- one before the display
+area, which really uses the sprites-on table, and the last display line, which uses it
+while fetching no sprites. It is worth two lines out of 262 and only matters to a command
+running exactly there.

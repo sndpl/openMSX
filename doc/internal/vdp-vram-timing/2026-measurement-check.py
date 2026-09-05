@@ -123,9 +123,9 @@ RELABEL = {'dispOff': {1325: 1324, 1335: 1334},
 # cycle longer than the 14/6/10 pattern it would otherwise have.  Each entry is
 # the cycle at which one stretch has completed; STRETCH_STEP is how many cycles
 # each of them adds.
-STRETCH = {'dispOff': (1334, 1344), 'sprOff': (1332, 1342),
-           'sprOn': (1330, 1337, 1348)}
-STRETCH_STEP = {'dispOff': 2, 'sprOff': 2, 'sprOn': 1}
+PAD = {'dispOff': ((1334, 2), (1344, 2)),
+       'sprOff': ((1332, 2), (1342, 2)),
+       'sprOn':  ((1330, 2), (1337, 1), (1348, 1))}
 
 # VRAM accesses per pixel/byte step, and the role of each
 ROLES = {
@@ -166,8 +166,9 @@ FITTED = {
 # table has them, 25 of its 88.
 TIGHT = {m: {s for s in t if (s - 6) in set(t)} for m, t in TABLES.items()}
 
-# Cycles that sprite rendering adds to every command engine step.
-SPR_ON_EXTRA = 2
+# Cycles that sprite rendering adds to every command engine step.  The
+# measurements admit 1 or 2 and cannot separate them; openMSX uses 1.
+SPR_ON_EXTRA = 1
 
 PLAIN = [False]     # --plain: VDP cycles, and no sprites-on adjustment
 TIGHT_RULE = [True]  # the extra cycle after an access in a 6-cycle-pair slot
@@ -184,18 +185,23 @@ def V(mode, t):
     if PLAIN[0]:
         return t
     line, c = divmod(t, TICKS)
-    step = STRETCH_STEP[mode]
-    seen = sum(1 for a in STRETCH[mode] if c >= a)
-    return t - step * (len(STRETCH[mode]) * line + seen)
+    pad = PAD[mode]
+    return t - (sum(n for _, n in pad) * line
+                + sum(n for a, n in pad if c >= a))
 
 
 def meta(path):
-    m = re.match(r'scr5-(\w+)-(\w+)-(\w+?)(?:-nx\d+)?-\d+[a-z]?\.txt$',
-                 os.path.basename(path))
-    if not m or m[1] not in TABLES:
+    """scr5-<mode>-<command>-<cpu>[-<variant>...]-<n><suffix>.txt"""
+    name = os.path.basename(path)
+    if not name.endswith('.txt'):
         return None
-    return {'mode': m[1], 'cmd': m[2], 'cpu': m[3],
-            'name': os.path.basename(path)}
+    parts = name[:-4].split('-')
+    if len(parts) < 5 or parts[0] != 'scr5' or parts[1] not in TABLES:
+        return None
+    if not re.fullmatch(r'\d+[a-z]?', parts[-1]):
+        return None
+    return {'mode': parts[1], 'cmd': parts[2], 'cpu': parts[3],
+            'variant': parts[4:-1], 'name': name}
 
 
 def parse(path):
