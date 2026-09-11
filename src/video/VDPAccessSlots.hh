@@ -22,7 +22,7 @@ enum class Delta : int {
 	CPU_28    =  3 * TICKS, //                                   (TMS99x8)
 	CMD_24    =  4 * TICKS, // The remaining ones are command engine steps
 	CMD_32    =  5 * TICKS, //   counted in 'memory cycles' rather than 'VDP cycles'
-	CMD_36    =  6 * TICKS, //   see the comment about 'stretch1' and 'stretch2' in
+	CMD_36    =  6 * TICKS, //   see the comment about 'pad' in
 	CMD_46    =  7 * TICKS, //   VDPAccessSlots.cc
 	CMD_60    =  8 * TICKS,
 	CMD_72    =  9 * TICKS,
@@ -33,15 +33,33 @@ enum class Delta : int {
 	CMD_84_36 = 13 * TICKS, // 84+36 = 120
 	CMD_60_68 = 14 * TICKS, // 60+68 = 128
 	CMD_72_58 = 15 * TICKS, // 72+58 = 130
+	// The delay between the write to R#46 that starts a command and the
+	// command's first VRAM access. Measured from the rising edge of /CSW as
+	// 46, 70, 82, 82, 94 and 94 cycles; the values below are those plus the
+	// 18 cycles between openMSX's port-write timestamp and that edge. The
+	// startup is a wait like any other, so it is counted in memory cycles
+	// and it gets the sprite addend. POINT, PSET, SRCH, LMCM, LMMC and HMMC
+	// have not been measured and still start immediately.
+	CMD_START_64  = 16 * TICKS, // LMMM
+	CMD_START_88  = 11 * TICKS, // LMMV       (notice: duplicate of CMD_88!)
+	CMD_START_100 = 17 * TICKS, // HMMM, YMMM
+	CMD_START_112 = 18 * TICKS, // HMMV, LINE
+	// Like CPU_16, but without skipping the slots the CPU cannot be served
+	// in: the slot it would have been granted, which the VDP spends on a
+	// dummy read when the two differ.
+	CPU_16_ANY = 19 * TICKS,
 };
-static constexpr int NUM_DELTAS = 16;
-/** The CPU access delays in the 'Delta' enum, D16 and D28. */
+static constexpr int NUM_DELTAS = 20;
+/** The CPU access delays in the 'Delta' enum, CPU_D16 and CPU_D28. Note that
+  * CPU_16_ANY is deliberately not one of them: it is the only one that does
+  * use the slots the CPU cannot be served in. */
 static constexpr int FIRST_CPU_DELTA = 2;
 static constexpr int LAST_CPU_DELTA = 4; // exclusive
-/** The first command engine step in the 'Delta' enum; everything from here on
-  * is subject to the memory-cycle counting. */
+/** The command engine delays in the 'Delta' enum: the steps and the startup
+  * delays. These get the sprite addend; they and the CPU delays above are all
+  * subject to the memory-cycle counting. */
 static constexpr int FIRST_CMD_DELTA = 4;
-static constexpr int LAST_CMD_DELTA = NUM_DELTAS; // exclusive
+static constexpr int LAST_CMD_DELTA = 19; // exclusive
 
 /** VDP-VRAM access slot calculator, meant to be used in the inner loops of the
   * VDPCmdEngine commands. Code optimized for the case that:
@@ -110,6 +128,20 @@ private:
 [[nodiscard]] Calculator getCalculator(
 	EmuTime frame, EmuTime time, EmuTime limit,
 	const VDP& vdp);
+
+/** The largest interval paddingCycles() accepts. */
+inline constexpr int MAX_PADDING_SPAN = 8;
+
+/** How many cycles of line padding complete in the interval (t, t + n], where
+  * 't' is at position 'tick' in its line: the number of cycles by which that
+  * interval is longer in VDP cycles than in the VDP's memory cycles. Only for
+  * short intervals; see the comment about 'pad' in VDPAccessSlots.cc. */
+[[nodiscard]] int paddingCycles(int tick, int n, const VDP& vdp);
+
+/** Is the CPU slot at line position 'slotTick' a 'late' one? Those hand out
+  * their grant 2 cycles later than the rest, and release the CPU's request
+  * buffer one cycle before their access instead of one cycle after. */
+[[nodiscard]] bool isLateCpuSlot(int slotTick, const VDP& vdp);
 
 } // namespace openmsx::VDPAccessSlots
 
