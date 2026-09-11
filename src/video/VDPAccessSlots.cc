@@ -228,7 +228,7 @@ struct CycleTable : AccessTable
 		// !!! Keep this in sync with the 'Delta' enum !!!
 		constexpr std::array<int, NUM_DELTAS> delta = {
 			0, 1, 16, 28, 24, 32, 36, 46, 60, 72, 84, 88, 36+68, 84+36, 60+68, 72+58,
-			64, 100, 112, 16
+			64, 100, 112, 16, 63, 76
 		};
 
 		// Memory-cycle time of every cycle in the line: real time minus the
@@ -264,7 +264,8 @@ struct CycleTable : AccessTable
 
 		size_t out = 0;
 		for (auto idx : xrange(NUM_DELTAS)) {
-			bool cmd = (FIRST_CMD_DELTA <= idx) && (idx < LAST_CMD_DELTA);
+			bool cmd = ((FIRST_CMD_DELTA <= idx) && (idx < LAST_CMD_DELTA)) ||
+			           ((FIRST_CMD_DELTA_2 <= idx) && (idx < LAST_CMD_DELTA_2));
 			bool any = idx == std::to_underlying(Delta::CPU_16_ANY) / TICKS;
 			bool cpu = ((FIRST_CPU_DELTA <= idx) && (idx < LAST_CPU_DELTA)) || any;
 			int step = delta[idx] + (cmd ? timing.extra : 0);
@@ -301,7 +302,8 @@ struct CycleTable : AccessTable
 		// which is the same as starting one cycle later. All the tight
 		// slots are in the display area, far away from the stretched
 		// memory cycles, so the shift is exact.
-		for (auto idx : xrange(FIRST_CMD_DELTA, LAST_CMD_DELTA)) {
+		for (auto idx : xrange(FIRST_CMD_DELTA, LAST_CMD_DELTA_2)) {
+			if ((LAST_CMD_DELTA <= idx) && (idx < FIRST_CMD_DELTA_2)) continue;
 			for (auto ts : tightSlots) {
 				size_t b = (size_t(idx) * TICKS) + ts;
 				values[b] = narrow_cast<uint8_t>(values[b + 1] + 1);

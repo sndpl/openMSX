@@ -35,21 +35,22 @@ enum class Delta : int {
 	CMD_72_58 = 15 * TICKS, // 72+58 = 130
 	// The delay between the write to R#46 that starts a command and the
 	// command's first VRAM access. Measured from the rising edge of /CSW as
-	// 46, 70, 82, 82, 94 and 94 cycles; the values below are those plus the
+	// 45, 46, 58, 70, 82 and 94 cycles; the values below are those plus the
 	// 18 cycles between openMSX's port-write timestamp and that edge. The
 	// startup is a wait like any other, so it is counted in memory cycles
-	// and it gets the sprite addend. POINT, PSET, SRCH, LMCM, LMMC and HMMC
-	// have not been measured and still start immediately.
+	// and it gets the sprite addend.
+	CMD_START_63  = 20 * TICKS, // POINT
 	CMD_START_64  = 16 * TICKS, // LMMM
-	CMD_START_88  = 11 * TICKS, // LMMV       (notice: duplicate of CMD_88!)
+	CMD_START_76  = 21 * TICKS, // LMCM
+	CMD_START_88  = 11 * TICKS, // LMMV, LMMC, PSET, SRCH  (= CMD_88!)
 	CMD_START_100 = 17 * TICKS, // HMMM, YMMM
-	CMD_START_112 = 18 * TICKS, // HMMV, LINE
+	CMD_START_112 = 18 * TICKS, // HMMV, LINE, HMMC
 	// Like CPU_16, but without skipping the slots the CPU cannot be served
 	// in: the slot it would have been granted, which the VDP spends on a
 	// dummy read when the two differ.
 	CPU_16_ANY = 19 * TICKS,
 };
-static constexpr int NUM_DELTAS = 20;
+static constexpr int NUM_DELTAS = 22;
 /** The CPU access delays in the 'Delta' enum, CPU_D16 and CPU_D28. Note that
   * CPU_16_ANY is deliberately not one of them: it is the only one that does
   * use the slots the CPU cannot be served in. */
@@ -59,7 +60,10 @@ static constexpr int LAST_CPU_DELTA = 4; // exclusive
   * delays. These get the sprite addend; they and the CPU delays above are all
   * subject to the memory-cycle counting. */
 static constexpr int FIRST_CMD_DELTA = 4;
-static constexpr int LAST_CMD_DELTA = 19; // exclusive
+static constexpr int LAST_CMD_DELTA = 19; // exclusive, and see LAST_CMD_DELTA_2
+/** The command engine startup delays that did not fit before CPU_16_ANY. */
+static constexpr int FIRST_CMD_DELTA_2 = 20;
+static constexpr int LAST_CMD_DELTA_2 = NUM_DELTAS; // exclusive
 
 /** VDP-VRAM access slot calculator, meant to be used in the inner loops of the
   * VDPCmdEngine commands. Code optimized for the case that:
