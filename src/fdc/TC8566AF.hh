@@ -56,6 +56,7 @@ public:
 		SENSE_INTERRUPT_STATUS,
 		SPECIFY,
 		SENSE_DEVICE_STATUS,
+		INVALID,
 	};
 	enum class Phase : uint8_t {
 		IDLE,
@@ -83,6 +84,7 @@ private:
 	void doSeek(int n);
 	void executionPhaseWrite(uint8_t value, EmuTime time);
 	void resultPhase(bool readId = false);
+	void invalidCommand();
 	void endCommand(EmuTime time);
 
 	[[nodiscard]] bool isHeadLoaded(EmuTime time) const;
@@ -117,6 +119,7 @@ private:
 	CRC16 crc;
 
 	uint8_t driveSelect;
+	uint8_t dataReg; // first byte of the last result phase, see readDataPort()
 	uint8_t mainStatus;
 	uint8_t status0;
 	uint8_t status1;
@@ -145,7 +148,7 @@ private:
 	};
 	std::array<SeekInfo, 4> seekInfo;
 };
-SERIALIZE_CLASS_VERSION(TC8566AF, 7);
+SERIALIZE_CLASS_VERSION(TC8566AF, 8);
 
 } // namespace openmsx
 
