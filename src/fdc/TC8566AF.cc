@@ -86,6 +86,7 @@ void TC8566AF::reset(EmuTime time)
 	//enableIntDma = 0;
 	//notReset = 1;
 	driveSelect = 0;
+	dataReg = 0;
 
 	status0 = 0;
 	status1 = 0;
@@ -148,7 +149,10 @@ uint8_t TC8566AF::peekDataPort(EmuTime time) const
 	case Phase::RESULT:
 		return resultsPhasePeek();
 	default:
-		return 0xff;
+		// Nothing is driving the bus, see readDataPort(). We
+		// approximate the floating value with the last byte the FDC
+		// itself put on it.
+		return dataReg;
 	}
 }
 
@@ -164,8 +168,32 @@ uint8_t TC8566AF::readDataPort(EmuTime time)
 		}
 	case Phase::RESULT:
 		return resultsPhaseRead(time);
-	default:
-		return 0xff;
+	default: {
+		// Reading the data register while the FDC is not offering data
+		// (DIO=0) is an invalid operation: nothing drives the bus, so
+		// the read returns whatever is floating on it, and the FDC
+		// latches that same value as if it had been written to the data
+		// register. Verified on a real FS-A1ST and a real FS-A1GT: the
+		// two machines return different bus values and, as a result,
+		// behave completely differently.
+		//
+		//   FS-A1ST  the bus held 0x00, which is an invalid command, so
+		//            the chip answers with a one byte ST0=0x80 result
+		//            phase. Reading that leaves 0x80 on the bus, which
+		//            is invalid too, so it keeps cycling.
+		//   FS-A1GT  the bus held 0x02, READ DIAGNOSTIC, so the chip
+		//            goes to the command phase and swallows every
+		//            further read as a parameter byte. It never drives
+		//            the bus, so this state persists.
+		//
+		// We can't know the floating value, approximate it with the last
+		// byte the FDC itself put on the bus. That reproduces the FS-A1ST
+		// exactly; for the FS-A1GT only the mechanism is reproduced, not
+		// the (machine specific) value.
+		auto result = dataReg; // writeDataPort() may overwrite it
+		writeDataPort(result, time);
+		return result;
+	}
 	}
 }
 
@@ -268,6 +296,13 @@ uint8_t TC8566AF::resultsPhasePeek() const
 			return status3;
 		}
 		break;
+
+	case INVALID:
+		switch (phaseStep) {
+		case 0:
+			return status0;
+		}
+		break;
 	default:
 		// nothing
 		break;
@@ -306,6 +341,14 @@ uint8_t TC8566AF::resultsPhaseRead(EmuTime time)
 		break;
 
 	case SENSE_DEVICE_STATUS:
+		switch (phaseStep++) {
+		case 0:
+			endCommand(time);
+			break;
+		}
+		break;
+
+	case INVALID:
 		switch (phaseStep++) {
 		case 0:
 			endCommand(time);
@@ -362,15 +405,20 @@ void TC8566AF::writeDataPort(uint8_t value, EmuTime time)
 void TC8566AF::idlePhaseWrite(uint8_t value, EmuTime time)
 {
 	using enum Command;
+	// The MT/MFM/SK bits (7/6/5) are modifiers, they take no part in
+	// decoding the command: only the lower 5 bits are looked at. The five
+	// short commands below are the exception, those do require bits 7-5 to
+	// be zero. Verified on a real FS-A1ST by writing all 256 command codes
+	// and checking which ones are answered with 'invalid command'.
 	command = UNKNOWN;
 	commandCode = value;
 	if ((commandCode & 0x1f) == 0x06) command = READ_DATA;
-	if ((commandCode & 0x3f) == 0x05) command = WRITE_DATA;
-	if ((commandCode & 0x3f) == 0x09) command = WRITE_DELETED_DATA;
+	if ((commandCode & 0x1f) == 0x05) command = WRITE_DATA;
+	if ((commandCode & 0x1f) == 0x09) command = WRITE_DELETED_DATA;
 	if ((commandCode & 0x1f) == 0x0c) command = READ_DELETED_DATA;
-	if ((commandCode & 0xbf) == 0x02) command = READ_DIAGNOSTIC;
-	if ((commandCode & 0xbf) == 0x0a) command = READ_ID;
-	if ((commandCode & 0xbf) == 0x0d) command = FORMAT;
+	if ((commandCode & 0x1f) == 0x02) command = READ_DIAGNOSTIC;
+	if ((commandCode & 0x1f) == 0x0a) command = READ_ID;
+	if ((commandCode & 0x1f) == 0x0d) command = FORMAT;
 	if ((commandCode & 0x1f) == 0x11) command = SCAN_EQUAL;
 	if ((commandCode & 0x1f) == 0x19) command = SCAN_LOW_OR_EQUAL;
 	if ((commandCode & 0x1f) == 0x1d) command = SCAN_HIGH_OR_EQUAL;
@@ -410,7 +458,31 @@ void TC8566AF::idlePhaseWrite(uint8_t value, EmuTime time)
 	case SENSE_DEVICE_STATUS:
 		break;
 
+	case UNKNOWN:
+		// An unrecognised command code gives a one byte result phase
+		// with ST0 = 0x80, see the INVALID COMMAND entry in the
+		// TC8566AF datasheet. Verified on a real FS-A1ST by writing all
+		// 256 codes: every code the chip doesn't know answers this way.
+		// Note this must NOT be merged into the 'default' case below:
+		// that one also catches real commands which openMSX simply
+		// doesn't implement, and those are accepted by the chip.
+		invalidCommand();
+		break;
+
 	default:
+		// Not implemented: READ_DIAGNOSTIC, READ_DELETED_DATA,
+		// WRITE_DELETED_DATA and the three SCAN commands. We accept the
+		// command code and end the command right away. Real hardware
+		// goes to the command phase and swallows the parameter bytes,
+		// so with this shortcut those bytes are decoded as command codes
+		// instead.
+		//
+		// No Panasonic diskROM issues any of these: on a real FS-A1ST,
+		// booting plus DIR, LOAD and SAVE only use 03 04 07 08 0F 45 46
+		// (and 4D when formatting). But note that the WD2793 emulation
+		// does implement the equivalents (READ_TRACK, and reading and
+		// writing the deleted data address mark), so software that uses
+		// them works on a WD2793 machine but not on a Panasonic one.
 		endCommand(time);
 	}
 }
@@ -879,6 +951,26 @@ void TC8566AF::resultPhase(bool readId)
 	phase       = Phase::RESULT;
 	phaseStep   = 0;
 	//interrupt = true;
+
+	// The data register keeps returning this byte after the command has
+	// finished, see readDataPort(). Verified on a real FS-A1ST: after
+	// booting (so after a successful read, ST0 = 0x00) reading the data
+	// register while idle gives 0x00; after an invalid command (ST0 =
+	// 0x80) it gives 0x80.
+	dataReg = resultsPhasePeek();
+}
+
+void TC8566AF::invalidCommand()
+{
+	// The chip signals an invalid command by returning a single ST0 byte
+	// with IC = 10. On real hardware the main status register first shows
+	// 'busy, not ready' (0x10) for a short while before the result byte is
+	// available (0xD0); that (unmeasured) delay is not emulated, we go to
+	// the result phase immediately.
+	command = Command::INVALID;
+	status0 = ST0_IC1;
+	mainStatus |= STM_CB;
+	resultPhase();
 }
 
 void TC8566AF::endCommand(EmuTime time)
@@ -940,6 +1032,7 @@ static constexpr auto commandInfo = std::to_array<enum_string<TC8566AF::Command>
 	{ "SENSE_INTERRUPT_STATUS", TC8566AF::Command::SENSE_INTERRUPT_STATUS },
 	{ "SPECIFY",                TC8566AF::Command::SPECIFY                },
 	{ "SENSE_DEVICE_STATUS",    TC8566AF::Command::SENSE_DEVICE_STATUS    },
+	{ "INVALID",                TC8566AF::Command::INVALID                },
 });
 SERIALIZE_ENUM(TC8566AF::Command, commandInfo);
 
@@ -978,6 +1071,7 @@ void TC8566AF::SeekInfo::serialize(Archive& ar, unsigned /*version*/)
 // version 5: removed trackData
 // version 6: added seekInfo[4]
 // version 7: added 'endOfTrack'
+// version 8: added 'dataReg'
 template<typename Archive>
 void TC8566AF::serialize(Archive& ar, unsigned version)
 {
@@ -1053,6 +1147,11 @@ void TC8566AF::serialize(Archive& ar, unsigned version)
 	}
 	if (ar.versionAtLeast(version, 7)) {
 		ar.serialize("endOfTrack", endOfTrack);
+	}
+	if (ar.versionAtLeast(version, 8)) {
+		ar.serialize("dataReg", dataReg);
+	} else {
+		dataReg = 0;
 	}
 };
 INSTANTIATE_SERIALIZE_METHODS(TC8566AF);
